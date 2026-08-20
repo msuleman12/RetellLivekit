@@ -74,6 +74,19 @@ class RouterAgent(Agent):
             # ran on gpt-4.1-mini. Agent-level llm overrides the session llm.
             llm=models.build_router_llm(),
         )
+        # Transcript the classifier last ran on. Deepgram often finalises one
+        # utterance as two messages in quick succession ("Tomorrow, I was
+        # talking." then "I need help."), which used to fire the classifier
+        # twice for what is really one turn — two serial round-trips in front
+        # of a single reply.
+        self._last_classified = ""
+        # A classification that outran its inline budget. It keeps running; its
+        # verdict is collected at the top of the next turn.
+        self._pending: asyncio.Task | None = None
+
+    async def on_exit(self) -> None:
+        if self._pending and not self._pending.done():
+            self._pending.cancel()
 
     async def on_enter(self) -> None:
         state: CallState = self.session.userdata
@@ -93,21 +106,39 @@ class RouterAgent(Agent):
         state.user_turns += 1
         text = utterance_text(new_message)
 
+        transcript = self._transcript(turn_ctx, text)
+
+        # Layer 0: a classification started on an earlier turn that came back
+        # after the router had already spoken. Free — it is already resolved.
+        verdict = self._collect_pending()
+
         # Layer 1: unambiguous phrasing routes with no model round-trip.
-        case = classify_case_type(text)
+        #
+        # Run the keyword pass over everything the caller has said, not just the
+        # latest utterance. "I slipped" / "at the store" arriving as two short
+        # turns matched nothing before and paid for an LLM round-trip; together
+        # they match instantly.
+        case = classify_case_type(text) or classify_case_type(
+            self._user_lines(transcript)
+        )
 
         # Layer 2: Retell's extract node. Reads the whole conversation, so a
         # caller whose first turn was "Hello?" and whose second was "my boss
         # stopped paying me" still routes on the second turn.
         #
         # Skipped for turns too short to carry a matter ("Hello?", "yes",
-        # "sorry?"), which are the ones where a model round-trip would only add
-        # delay before an unavoidable clarifying question.
-        if case is None and len(text.split()) >= 3:
-            transcript = self._transcript(turn_ctx, text)
-            verdict = await classify_case_type_llm(
-                transcript, timeout_s=settings.llm.classify_timeout_ms / 1000
-            )
+        # "sorry?"), and skipped when this exact transcript was already
+        # classified — both only add delay.
+        if (
+            case is None
+            and verdict is None
+            and len(text.split()) >= 3
+            and transcript != self._last_classified
+        ):
+            self._last_classified = transcript
+            verdict = await self._classify_within_budget(transcript)
+
+        if verdict is not None:
             if verdict in _AGENTS:
                 case = verdict
             elif verdict == "other" and state.router_asked_clarify:
@@ -127,6 +158,61 @@ class RouterAgent(Agent):
         # Still unplaced: ask one more clarifying question. Retell never hung up
         # on a caller who wanted a lawyer just because the matter was fuzzy.
         state.router_asked_clarify = True
+
+    async def _classify_within_budget(self, transcript: str):
+        """Ask the classifier, but cap how long the caller waits on it.
+
+        The request itself gets ``classify_timeout_ms``. The *caller* only waits
+        ``classify_inline_budget_ms``. If the answer misses that window the
+        router speaks its clarifying question straight away and the task is
+        parked on ``self._pending``, where the next turn collects it for free —
+        so a slow uplink costs one extra question, never dead air.
+        """
+        task = asyncio.ensure_future(
+            classify_case_type_llm(
+                transcript, timeout_s=settings.llm.classify_timeout_ms / 1000
+            )
+        )
+        done, _ = await asyncio.wait(
+            {task}, timeout=settings.llm.classify_inline_budget_ms / 1000
+        )
+        if task in done:
+            try:
+                return task.result()
+            except Exception:  # pragma: no cover - classify_* swallows its own
+                logger.debug("router classification task failed", exc_info=True)
+                return None
+
+        logger.debug("classification over inline budget; answering without it")
+        if self._pending and not self._pending.done():
+            self._pending.cancel()
+        self._pending = task
+        return None
+
+    def _collect_pending(self):
+        """Verdict from a task parked by a previous turn, if it has landed."""
+        task, self._pending = self._pending, None
+        if task is None:
+            return None
+        if not task.done():
+            # Still in flight — put it back rather than cancelling; it may well
+            # answer before the caller finishes their next sentence.
+            self._pending = task
+            return None
+        try:
+            return task.result()
+        except Exception:  # pragma: no cover
+            return None
+
+    @staticmethod
+    def _user_lines(transcript: str) -> str:
+        """Just the caller's words, so the keyword pass never matches on
+        Claire's own clarifying question ("...is this about a car accident...")."""
+        return " ".join(
+            line[len("User: ") :]
+            for line in transcript.splitlines()
+            if line.startswith("User: ")
+        )
 
     @staticmethod
     def _transcript(turn_ctx: llm.ChatContext, latest_user_text: str = "") -> str:

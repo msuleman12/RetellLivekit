@@ -202,6 +202,14 @@ class BaseIntakeAgent(Agent):
             # too, because it reads the whole transcript.
             return
 
+        # Backchannel turns ("yeah", "okay", "mm-hmm", "sorry?") carry nothing
+        # to extract, but each one used to fire a structured-output call with
+        # the full field schema. Those calls share the process's OpenAI
+        # connection pool with the reply the caller is waiting on, which is a
+        # large part of why `llm_ttft` spiked to ~6s mid-conversation.
+        if len(latest_user_text.split()) < 3:
+            return
+
         transcript = self._transcript_from(turn_ctx, latest_user_text)
         if not transcript.strip():
             return

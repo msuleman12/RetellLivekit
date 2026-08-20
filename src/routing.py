@@ -40,7 +40,10 @@ _HARASSMENT = re.compile(
     re.IGNORECASE,
 )
 _MALPRACTICE = re.compile(
-    r"malpractice|medical\s+negligen|botched\s+(?:surgery|procedure)|"
+    # "botched my surgery" / "botched the knee procedure" used to fall through
+    # because the noun had to follow "botched" immediately.
+    r"malpractice|medical\s+negligen|"
+    r"botched\s+(?:\w+\s+){0,2}(?:surgery|procedure|operation)|"
     r"misdiagnos|surgical\s+error|doctor\s+(?:erred|error|negligen)|"
     r"hospital\s+(?:negligen|error)",
     re.IGNORECASE,
@@ -48,12 +51,17 @@ _MALPRACTICE = re.compile(
 _EMPLOYMENT = re.compile(
     r"\b(?:workplace|employer|employment|wrongful\s+terminat|fired|terminated|"
     r"wages?|discrimination|retaliation|hurt\s+at\s+work|injured\s+at\s+work|"
-    r"on\s+the\s+job|at\s+my\s+job|workers?\s+comp)\b",
+    # Bare "at work" was missing, so "I had an accident at work" fell through to
+    # the accident branch — the exact misroute Retell's rules warn about
+    # ("Injury while working for employer -> employment NOT accident").
+    r"at\s+work|on\s+the\s+job|at\s+my\s+job|workers?\s+comp)\b",
     re.IGNORECASE,
 )
 _ACCIDENT = re.compile(
     r"\b(?:car\s+accident|auto\s+accident|vehicle|crash(?:ed)?|hit[\s-]?and[\s-]?run|"
-    r"rear[\s-]?end|collision|fender\s+bender|motor\s+vehicle|"
+    # `rear[\s-]?end` alone never matched "rear-ended" — the trailing \b on the
+    # group landed inside the word.
+    r"rear[\s-]?end(?:ed)?|collision|fender\s+bender|motor\s+vehicle|"
     r"call\s+accident|call\s+ex)\b|"
     r"\b(?:hit|struck)\s+(?:my|our|the)\s+car\b",
     re.IGNORECASE,
@@ -61,10 +69,21 @@ _ACCIDENT = re.compile(
 _PREMISES = re.compile(
     r"\b(?:slip(?:ped)?\s+and\s+fell?\b|trip(?:ped)?\s+and\s+fell?\b|"
     r"slip[\s-]?fall|premises|"
+    # "I slipped" and "at the store" often arrive as two short turns; joined,
+    # they should match here rather than costing a model round-trip. Employment
+    # is tested first, so "slipped at work" still routes to employment.
+    r"(?:slip(?:ped)?|trip(?:ped)?|fell|fall)\s+(?:at|in|on|down|inside|outside)\b|"
     r"fell\s+(?:at|in|on)\s+(?:a\s+)?(?:store|walmart|target|parking|"
     r"sidewalk|grocery|restaurant|mall))\b",
     re.IGNORECASE,
 )
+
+#: Last resort, and only after every other area has been ruled out. Deepgram
+#: mangles "car accident" constantly — the logs alone have produced "call
+#: accident", "call ex" and "quad accident". Enumerating mishears is a losing
+#: game; for a personal-injury firm, a bare "accident" that is not a workplace,
+#: medical, harassment or premises matter is an accident.
+_ACCIDENT_LOOSE = re.compile(r"\baccident\b|\bwreck\b", re.IGNORECASE)
 
 
 def classify_case_type(text: str) -> CaseType | None:
@@ -89,6 +108,10 @@ def classify_case_type(text: str) -> CaseType | None:
         return "accident"
     if _PREMISES.search(raw):
         return "premises"
+    # Checked last, after premises, so "I had an accident, slipped in the store"
+    # still routes to premises.
+    if _ACCIDENT_LOOSE.search(raw):
+        return "accident"
     return None
 
 
@@ -131,6 +154,45 @@ clearly confirmed the matter is none of the five practice areas.
 """
 
 
+# ---------------------------------------------------------------------------
+# One shared OpenAI client for the whole process.
+#
+# This used to build `AsyncOpenAI(...)` inside the function, i.e. once per
+# caller turn. Every construction brings its own httpx client and therefore its
+# own DNS lookup + TCP + TLS handshake to api.openai.com before a single token
+# moves — several hundred ms of dead air on every turn. A module-level client
+# keeps the connection pool warm across turns.
+# ---------------------------------------------------------------------------
+_client = None
+
+
+def _get_client():
+    global _client
+    if _client is None:
+        from openai import AsyncOpenAI
+
+        from . import settings
+
+        _client = AsyncOpenAI(
+            api_key=settings.llm.api_key or None,
+            max_retries=0,  # the caller already falls back to a clarifying question
+        )
+    return _client
+
+
+#: The classifier only ever needs the recent conversation. Sending the whole
+#: transcript grows the prompt (and the time-to-first-token) linearly with call
+#: length for no gain in routing accuracy.
+_MAX_TRANSCRIPT_LINES = 10
+_MAX_TRANSCRIPT_CHARS = 1500
+
+
+def trim_transcript(transcript: str) -> str:
+    lines = [ln for ln in transcript.splitlines() if ln.strip()][-_MAX_TRANSCRIPT_LINES:]
+    text = "\n".join(lines)
+    return text[-_MAX_TRANSCRIPT_CHARS:]
+
+
 async def classify_case_type_llm(transcript: str, *, timeout_s: float = 2.5):
     """Retell's extract node. Returns a case type, "unclear", or None on error.
 
@@ -145,13 +207,14 @@ async def classify_case_type_llm(transcript: str, *, timeout_s: float = 2.5):
     try:
         import asyncio
 
-        from openai import AsyncOpenAI
-
-        client = AsyncOpenAI(api_key=settings.llm.api_key or None)
+        client = _get_client()
         completion = await asyncio.wait_for(
             client.chat.completions.create(
                 model=settings.llm.router_model,
                 temperature=0,
+                # The reply is a single enum value; without a cap the model is
+                # free to spend time it does not need.
+                max_tokens=16,
                 response_format={"type": "json_schema", "json_schema": _CLASSIFY_SCHEMA},
                 messages=[
                     {
@@ -160,7 +223,7 @@ async def classify_case_type_llm(transcript: str, *, timeout_s: float = 2.5):
                             rules=prompts.ROUTER_CASE_TYPE_RULES
                         ),
                     },
-                    {"role": "user", "content": transcript},
+                    {"role": "user", "content": trim_transcript(transcript)},
                 ],
             ),
             timeout=timeout_s,
@@ -171,5 +234,12 @@ async def classify_case_type_llm(transcript: str, *, timeout_s: float = 2.5):
         logger.info("router classified matter as %r", value)
         return value or None
     except Exception as exc:
-        logger.warning("router classification unavailable (%s); clarifying instead", exc)
+        # `str(TimeoutError())` is the empty string, which produced the useless
+        # "router classification unavailable ()" line in the logs. Name the type
+        # so a timeout is distinguishable from an auth or network failure.
+        logger.warning(
+            "router classification unavailable (%s: %s); clarifying instead",
+            type(exc).__name__,
+            exc or "no detail",
+        )
         return None

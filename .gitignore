@@ -8,3 +8,6 @@ recordings/
 .DS_Store
 *.log
 sip_config.json
+.env.*
+.env.bak*
+_local_backups/

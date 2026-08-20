@@ -32,6 +32,13 @@ def build_stt() -> deepgram.STT:
         smart_format=not fast,
         filler_words=not fast,
         numerals=True,
+        # Backstop for end-of-turn. Deepgram's endpoint signal is the primary
+        # trigger; when it does not arrive (the logs showed 1.1-1.6s gaps
+        # between the caller finishing and `user turn committed`), UtteranceEnd
+        # fires from the word-timing gap instead. It can only make a turn end
+        # sooner than waiting on the finalise, never sooner than the endpoint
+        # itself, so it cannot cut a caller off. 1000ms is Deepgram's minimum.
+        utterance_end_ms=1000 if fast else None,
         # Retell `boosted_keywords`
         keyterm=list(settings.call.boosted_keywords),
     )
@@ -110,6 +117,12 @@ def build_tts() -> elevenlabs.TTS:
         ]
 
     fast = settings.call.is_fast
+
+    # NOTE - do not add `chunk_length_schedule` here. The plugin documents
+    # `auto_mode` as "reduces latency by disabling chunk schedule and buffers",
+    # and it only defaults to True when no schedule is given. Passing a schedule
+    # alongside auto_mode=True is at best a no-op and at worst turns the buffer
+    # back on. auto_mode is already the lowest-latency setting available.
     return elevenlabs.TTS(
         voice_id=cfg.voice_id,
         model=cfg.model,

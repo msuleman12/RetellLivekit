@@ -76,9 +76,15 @@ def endpointing_delays(responsiveness: float) -> tuple[float, float]:
 
 
 def resolve_latency_profile(raw: str | None = None) -> str:
-    """Return ``parity`` or ``fast``. Unknown values fall back to parity."""
-    value = (raw if raw is not None else _str("LATENCY_PROFILE", "parity")).strip().lower()
-    return value if value in ("parity", "fast") else "parity"
+    """Return ``parity`` or ``fast``. Unknown values fall back to fast.
+
+    Default flipped from ``parity`` to ``fast``: parity leaves turn detection on
+    LiveKit's cloud TurnDetector, which adds a 1-2s transport round-trip to the
+    end of every caller turn. Set ``LATENCY_PROFILE=parity`` in .env to get the
+    old timing back.
+    """
+    value = (raw if raw is not None else _str("LATENCY_PROFILE", "fast")).strip().lower()
+    return value if value in ("parity", "fast") else "fast"
 
 def resolve_stt_endpointing_ms(profile: str, env_raw: str | None = None) -> int:
     """STT endpointing: explicit env wins; otherwise 200ms (fast) or 450ms (parity)."""
@@ -177,6 +183,20 @@ class LLMSettings:
     classify_timeout_ms: int = field(
         default_factory=lambda: _int("ROUTER_CLASSIFY_TIMEOUT_MS", 2_500)
     )
+    #: How long the caller is made to wait for that classification before the
+    #: router speaks anyway.
+    #:
+    #: These are two different budgets and conflating them was a mistake. On a
+    #: slow uplink the classifier takes 0.7-1.5s; a single 1.2s cap meant the
+    #: request was cancelled *and* the caller still sat through 1.2s of silence,
+    #: which is the worst of both. Now the request gets the full
+    #: `classify_timeout_ms` to finish, but the caller only waits
+    #: `classify_inline_budget_ms` for it. If it lands late, the router has
+    #: already asked its clarifying question and the verdict is applied at the
+    #: start of the next turn instead of being thrown away.
+    classify_inline_budget_ms: int = field(
+        default_factory=lambda: _int("ROUTER_CLASSIFY_INLINE_BUDGET_MS", 700)
+    )
 
 
 @dataclass(frozen=True)
@@ -237,11 +257,34 @@ class CallSettings:
     )
     use_turn_detector: bool = field(default_factory=lambda: _bool("USE_TURN_DETECTOR", True))
 
-    # Retell `boosted_keywords` -> Deepgram keyterms
+    # Retell `boosted_keywords` -> Deepgram nova-3 keyterms.
+    #
+    # These are the only words the recogniser is told to expect, so the list has
+    # to contain the phrases the routing decision actually hangs on — not just
+    # the firm's own names. Deepgram was returning "quad accident", "call
+    # accident" and "call ex" for "car accident", which meant the router had
+    # nothing to match and asked the caller the same question again.
+    #
+    # "Bush & Bush Law Group" was also wrong as a keyterm: keyterms are matched
+    # against speech, and nobody says "ampersand".
     boosted_keywords: tuple[str, ...] = (
-        "Bush & Bush Law Group",
-        "Sawana",
+        "Bush and Bush",
+        "Bush and Bush Law Group",
         "Claire",
+        # routing vocabulary - one keyterm per phrase the classifier keys on
+        "car accident",
+        "auto accident",
+        "hit and run",
+        "rear ended",
+        "fender bender",
+        "slip and fall",
+        "slipped and fell",
+        "premises liability",
+        "medical malpractice",
+        "misdiagnosed",
+        "wrongful termination",
+        "workers comp",
+        "sexual harassment",
     )
 
     @property

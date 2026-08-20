@@ -304,7 +304,7 @@ class LiveExtractor:
             for topic in raised:
                 if isinstance(topic, str) and topic in self._optional_names:
                     state.asked_topics.add(topic)
-
+ 
         if notes:
             logger.info("live extraction: %s", ", ".join(notes))
         return notes
