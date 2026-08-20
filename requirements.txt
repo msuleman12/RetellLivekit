@@ -1,0 +1,19 @@
+# Bush & Bush Law Group - LiveKit voice agent
+# Pinned to the versions this project was written and verified against.
+
+livekit-agents[deepgram,elevenlabs,openai,silero]~=1.6.10
+livekit-api~=1.0
+
+# Optional: LiveKit Cloud noise cancellation (Retell's
+# denoising_mode = "noise-and-background-speech-cancellation" equivalent).
+# Ships as a platform wheel; if it fails to install the agent still runs,
+# it just skips noise cancellation.
+livekit-plugins-noise-cancellation~=0.3
+
+python-dotenv~=1.0
+aiohttp~=3.9
+
+# Control API
+fastapi~=0.115
+uvicorn[standard]~=0.32
+pydantic~=2.9

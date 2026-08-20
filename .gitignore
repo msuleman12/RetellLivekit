@@ -1,0 +1,10 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+call_records/
+recordings/
+.DS_Store
+*.log
+sip_config.json
