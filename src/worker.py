@@ -14,6 +14,7 @@ the job, and `RouterAgent` answers - the same entry point Retell's
 from __future__ import annotations
 
 import logging
+import os
 
 from livekit.agents import (
     NOT_GIVEN,
@@ -34,6 +35,24 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
 )
+
+# Console mode repaints a status bar over the terminal, so log lines scroll out
+# of reach. Set LOG_FILE in .env (or the environment) to keep a plain copy:
+#
+#     LOG_FILE=run.log
+#     python -m src.worker console
+#     Select-String "turn timing" run.log        # PowerShell
+#
+# Piping the worker itself is not an option - console mode needs the terminal
+# for the microphone UI.
+_log_file = os.getenv("LOG_FILE", "").strip()
+if _log_file:
+    _handler = logging.FileHandler(_log_file, mode="a", encoding="utf-8")
+    _handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)-8s %(name)s: %(message)s")
+    )
+    logging.getLogger().addHandler(_handler)
+
 logger = logging.getLogger("bushbush.worker")
 
 

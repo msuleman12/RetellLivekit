@@ -197,6 +197,11 @@ class BaseIntakeAgent(Agent):
     def _schedule_extraction(
         self, state: CallState, turn_ctx: llm.ChatContext, latest_user_text: str
     ) -> None:
+        if not settings.llm.live_extract_enabled:
+            # See settings.LLMSettings.live_extract_enabled. Capture still runs
+            # inline via capture.py, and postcall.py fills in the rest.
+            return
+
         if self._extract_task and not self._extract_task.done():
             # A slower previous run is still going; it will pick up this turn
             # too, because it reads the whole transcript.

@@ -199,7 +199,23 @@ class LiveExtractor:
                     timeout=settings.llm.live_extract_timeout_ms / 1000,
                 )
             except asyncio.TimeoutError:
-                logger.debug("live extraction timed out; regex fast-path still applies")
+                # Timeouts count toward the breaker too. This path used to return
+                # without incrementing, so on a slow uplink it fired on every
+                # single turn, never disabled itself, and kept spending bandwidth
+                # the caller's own reply needed. Three timeouts and it stands down;
+                # `capture.py` still covers phone, name and the conflict check.
+                self._consecutive_failures += 1
+                if self._consecutive_failures >= self.MAX_CONSECUTIVE_FAILURES:
+                    self._disabled = True
+                    logger.warning(
+                        "live extraction disabled after %d timeouts, regex capture "
+                        "only from here",
+                        self._consecutive_failures,
+                    )
+                else:
+                    logger.debug(
+                        "live extraction timed out; regex fast-path still applies"
+                    )
                 return []
             except Exception as exc:
                 self._consecutive_failures += 1

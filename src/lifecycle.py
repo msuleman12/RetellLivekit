@@ -39,6 +39,9 @@ class CallLifecycle:
         self._closed = False
         # Wall time of the latest final user transcript; used for reply-latency logs.
         self._user_final_at: float | None = None
+        # Per-turn timing parts, keyed by speech_id, assembled from
+        # `metrics_collected` and logged as one line once TTS reports in.
+        self._turn_parts: dict[str, dict] = {}
 
     # ------------------------------------------------------------------
     def start(self) -> None:
@@ -46,6 +49,7 @@ class CallLifecycle:
         self._session.on("user_state_changed", self._on_user_state)
         self._session.on("conversation_item_added", self._on_item_added)
         self._session.on("agent_state_changed", self._on_agent_state)
+        self._session.on("metrics_collected", self._on_metrics)
 
         loop = asyncio.get_event_loop()
         self._tasks.append(loop.create_task(self._silence_watchdog()))
@@ -94,6 +98,87 @@ class CallLifecycle:
             "reply_latency_ms=%.0f profile=%s",
             delta_ms,
             settings.call.latency_profile,
+        )
+
+    # -- per-turn timing breakdown --------------------------------------
+    #
+    # The console UI paints these numbers in a status bar that scrolls away and
+    # never reaches the log file. Every metric below is reported by LiveKit in
+    # SECONDS; they are printed as ms to match the status bar.
+    #
+    # The two TTS numbers answer different questions:
+    #   tts_wait (acquire_time) - how long the request sat waiting for a free
+    #                             TTS connection before it was even sent. Large
+    #                             here means the pool is the bottleneck, not
+    #                             ElevenLabs.
+    #   tts_ttfb                - how long ElevenLabs took to return the first
+    #                             audio byte once the request was on the wire.
+    # `conn_reused=False` means a fresh websocket had to be opened, which is
+    # where a one-off ~1s tts_ttfb usually comes from.
+    @staticmethod
+    def _ms(value) -> str:
+        return "-" if value is None else f"{value * 1000:.0f}ms"
+
+    def _on_metrics(self, ev) -> None:
+        try:
+            m = getattr(ev, "metrics", None)
+            if m is None:
+                return
+            kind = type(m).__name__
+            sid = getattr(m, "speech_id", None) or "adhoc"
+
+            if kind == "EOUMetrics":
+                part = self._turn_parts.setdefault(sid, {})
+                part["eou"] = getattr(m, "end_of_utterance_delay", None)
+                part["stt"] = getattr(m, "transcription_delay", None)
+                part["cb"] = getattr(m, "on_user_turn_completed_delay", None)
+
+            elif kind == "LLMMetrics":
+                if getattr(m, "cancelled", False):
+                    return
+                part = self._turn_parts.setdefault(sid, {})
+                # A turn can make more than one LLM call (tool steps); the first
+                # is the one the caller is waiting on.
+                part.setdefault("llm_ttft", getattr(m, "ttft", None))
+
+            elif kind == "TTSMetrics":
+                if getattr(m, "cancelled", False):
+                    return
+                part = self._turn_parts.setdefault(sid, {})
+                if part.get("logged"):
+                    return  # later sentences of the same reply; only the first matters
+                part["tts_ttfb"] = getattr(m, "ttfb", None)
+                part["tts_wait"] = getattr(m, "acquire_time", None)
+                part["tts_reused"] = getattr(m, "connection_reused", None)
+                self._log_turn(sid)
+        except Exception:  # pragma: no cover - never break a call over a log line
+            logger.debug("turn metrics line failed", exc_info=True)
+
+    def _log_turn(self, sid: str) -> None:
+        part = self._turn_parts.get(sid)
+        if not part or part.get("logged"):
+            return
+        # Kept rather than popped, so the remaining sentences of this same reply
+        # can see the flag and stay quiet. Trim so a long call cannot grow it
+        # without bound.
+        part["logged"] = True
+        while len(self._turn_parts) > 20:
+            self._turn_parts.pop(next(iter(self._turn_parts)))
+        spoke_after = sum(
+            v for v in (part.get("eou"), part.get("llm_ttft"), part.get("tts_ttfb"))
+            if isinstance(v, (int, float))
+        )
+        logger.info(
+            "turn timing | eou %s (stt %s + cb %s) | llm_ttft %s | "
+            "tts_wait %s -> tts_ttfb %s (conn_reused=%s) | caller waited %s",
+            self._ms(part.get("eou")),
+            self._ms(part.get("stt")),
+            self._ms(part.get("cb")),
+            self._ms(part.get("llm_ttft")),
+            self._ms(part.get("tts_wait")),
+            self._ms(part.get("tts_ttfb")),
+            part.get("tts_reused"),
+            self._ms(spoke_after),
         )
 
     # -- watchdogs ------------------------------------------------------

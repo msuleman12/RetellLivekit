@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 
+import httpx as _httpx
 from livekit.agents import NOT_GIVEN, EndpointingOptions, InterruptionOptions, TurnHandlingOptions
 from livekit.plugins import deepgram, elevenlabs, openai, silero
 
@@ -32,13 +33,14 @@ def build_stt() -> deepgram.STT:
         smart_format=not fast,
         filler_words=not fast,
         numerals=True,
-        # Backstop for end-of-turn. Deepgram's endpoint signal is the primary
-        # trigger; when it does not arrive (the logs showed 1.1-1.6s gaps
-        # between the caller finishing and `user turn committed`), UtteranceEnd
-        # fires from the word-timing gap instead. It can only make a turn end
-        # sooner than waiting on the finalise, never sooner than the endpoint
-        # itself, so it cannot cut a caller off. 1000ms is Deepgram's minimum.
-        utterance_end_ms=1000 if fast else None,
+        # NOTE - do not set `utterance_end_ms` here. It was tried as an
+        # end-of-turn backstop and made things worse: it forces END_OF_SPEECH
+        # after a 1s gap between words, so a caller thinking mid-sentence had
+        # "I was" / "someone hit my car" / "at the intersection" / "and ran"
+        # committed as four separate turns. Each turn is its own LLM reply, and
+        # four queued replies on a slow uplink is what produced
+        # "failed to generate LLM completion: Request timed out".
+        # Deepgram's own endpoint signal decides the turn; leave it alone.
         # Retell `boosted_keywords`
         keyterm=list(settings.call.boosted_keywords),
     )
@@ -70,6 +72,10 @@ def build_llm() -> openai.LLM:
         model=settings.llm.model,
         temperature=settings.llm.temperature,
         api_key=settings.llm.api_key or NOT_GIVEN,
+        # Without this the plugin waits on the SDK default before it reports
+        # "Request timed out" and retries, which on a bad link means the caller
+        # sits in silence for the whole window. Fail fast, retry sooner.
+        timeout=_httpx.Timeout(connect=5.0, read=15.0, write=10.0, pool=5.0),
     )
 
 

@@ -111,11 +111,20 @@ def resolve_responsiveness(profile: str, env_raw: str | None = None) -> float:
 
 
 def resolve_endpointing(profile: str, responsiveness: float) -> tuple[float, float]:
-    """Endpointing delays; fast profile tightens min and caps max at 1.2s."""
+    """Endpointing delays for the fast profile.
+
+    min 0.1 / max 1.2 was too eager. A caller telling their story pauses to
+    think, and at 1.2s the turn was committed regardless — one sentence became
+    four turns, four turns became four queued LLM replies, and the queue is what
+    timed out. 0.35 still answers a finished sentence promptly; 2.5 gives a
+    thinking pause room to finish before the agent jumps in.
+    """
     min_delay, max_delay = endpointing_delays(responsiveness)
     if profile == "fast":
-        min_delay = min(min_delay, 0.1)
-        max_delay = min(max_delay, 1.2)
+        # `max`, not `min` — 0.35 is a floor that lets a chopped-up utterance
+        # settle into one turn, not a ceiling that makes the agent even twitchier.
+        min_delay = max(min_delay, 0.4)
+        max_delay = min(max_delay, 2.5)
     return min_delay, max_delay
 
 
@@ -177,6 +186,21 @@ class LLMSettings:
     )
     live_extract_timeout_ms: int = field(
         default_factory=lambda: _int("LIVE_EXTRACT_TIMEOUT_MS", 6_000)
+    )
+    #: Off by default. The live extractor is a second gpt-4.1-mini request, with
+    #: the full 26-field JSON schema, fired after each caller turn — and it
+    #: shares one connection pool with the reply the caller is waiting on. On a
+    #: home uplink it never finished inside its 6s budget anyway, so it bought
+    #: nothing and cost `llm_ttft`. Nothing is lost that matters: `capture.py`
+    #: still records phone, name, read-back and the conflict check inline with
+    #: no network at all, and `postcall.py` extracts every field once the call
+    #: has ended, where latency is nobody's problem.
+    #:
+    #: Set LIVE_EXTRACT_ENABLED=true once the worker runs somewhere with a fast
+    #: link to OpenAI — it is genuinely useful there, because it stops Claire
+    #: re-asking something the caller already said.
+    live_extract_enabled: bool = field(
+        default_factory=lambda: _bool("LIVE_EXTRACT_ENABLED", False)
     )
     #: Router case-type classification. Retell's flow ran gpt-4.1-nano on an
     #: `extract_dynamic_variables` node; same model, same enum description.
