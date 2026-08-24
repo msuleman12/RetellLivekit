@@ -7,12 +7,18 @@ analysis and for per-turn ALREADY COLLECTED injection so Claire does not re-ask.
 
 from __future__ import annotations
 
+import os
 import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
 CASE_TYPES = ("accident", "employment", "premises", "harassment", "malpractice", "other")
+
+#: How many times to ask for the callback number before letting the call move
+#: on. A caller who has said it three times and is still being asked is having
+#: a worse experience than the firm gets value from a fourth attempt.
+MAX_PHONE_ATTEMPTS = 3
 
 _WORD_DIGITS: dict[str, str] = {
     "zero": "0",
@@ -78,24 +84,43 @@ def is_valid_us_number(digits: str) -> bool:
     """
     if len(digits) != 10 or not digits.isdigit():
         return False
+    if _allow_test_numbers():
+        return True
     return digits[0] in "23456789" and digits[3] in "23456789"
 
 
+def _allow_test_numbers() -> bool:
+    """`ALLOW_TEST_PHONE_NUMBERS=true` accepts 555/123-style fake numbers.
+
+    Strictly for console testing. Never set it in production: it is the check
+    that stops an unreachable number reaching the firm.
+    """
+    return os.getenv("ALLOW_TEST_PHONE_NUMBERS", "").strip().lower() in (
+        "1", "true", "yes", "y", "on",
+    )
+
+
 def normalize_phone(raw: str | None) -> str | None:
-    """Return a valid 10-digit US number, or None if we do not have one yet."""
+    """Return a valid 10-digit US number, or None if we do not have one yet.
+
+    This used to go hunting: on a digit string longer than 11 it scanned for
+    ANY contiguous 10-digit window that happened to look valid and returned it.
+    On a real call the caller's first, garbled attempt —
+
+        "plus 1 2 2, 3, 45, 56, 78, and 90"  ->  122345567890
+
+    — produced `2234556789`, a number nobody had said. It was stored, never
+    revisited, and shipped to the firm, while the agent went on asking for a
+    correct number four more times.
+
+    A digit run that is not 10, or 11 starting with the country code, is a
+    mis-hear. The honest answer is None: ask again rather than invent.
+    """
     digits = extract_phone_digits(raw)
     if len(digits) == 11 and digits.startswith("1"):
         digits = digits[1:]
-    # If STT appended extra noise digits, prefer the last 10 of a longer string
-    # only when it looks like country-code + number was mangled beyond 11.
-    if len(digits) > 11 and digits.startswith("1"):
-        digits = digits[1:]
-    if len(digits) > 10:
-        # Prefer a contiguous valid 10-digit US number if present; else last 10.
-        for match in re.finditer(r"(?=(\d{10}))", digits):
-            if is_valid_us_number(match.group(1)):
-                return match.group(1)
-        digits = digits[-10:]
+    if len(digits) != 10:
+        return None
     return digits if is_valid_us_number(digits) else None
 
 
@@ -132,6 +157,15 @@ class CallState:
     last_name: str = ""
     phone: str = ""  # normalized, 10 digits
     phone_read_back: bool = False
+    #: How many times the caller has tried to give a number. After
+    #: MAX_PHONE_ATTEMPTS the agent stops asking — see `missing_must_haves`.
+    phone_attempts: int = 0
+    #: The digits from the caller's last attempt, even when they did not form a
+    #: valid US number. Better the firm sees "they said 1234567890, unverified"
+    #: than an empty field or, worse, a number nobody spoke.
+    phone_heard_raw: str = ""
+    #: True when the number on file failed validation but we stopped asking.
+    phone_unverified: bool = False
     other_party_name: str = ""  # a name, or the literal "I don't know"
     incident_summary: str = ""
     # The sexual-harassment prompt explicitly says not to press for the other
@@ -190,8 +224,14 @@ class CallState:
             missing.append("their first name")
         if not self.last_name:
             missing.append("their last name")
-        if not self.phone:
+        if not self.phone and self.phone_attempts < MAX_PHONE_ATTEMPTS:
             missing.append("a callback number they said out loud, with all 10 digits")
+        elif not self.phone and self.phone_attempts >= MAX_PHONE_ATTEMPTS:
+            # Three goes and it still is not a dialable number. On a real call
+            # the caller repeated it four times and was asked a fifth; that is
+            # not intake, it is an argument. Take what was heard, flag it, and
+            # let the conversation move on — the attorney can confirm.
+            pass
         elif not self.phone_read_back:
             missing.append("a read-back of the phone number so they can correct it")
         if self.other_party_required and not self.other_party_name:
@@ -233,98 +273,63 @@ class CallState:
         return blockers
 
     def collected_summary(self, still_unknown: tuple[str, ...] = ()) -> str:
-        """Per-turn system note so the model does not re-ask known fields."""
-        lines = ["ALREADY COLLECTED — do NOT re-ask these:"]
-        if self.full_name:
-            lines.append(f"- name: {self.full_name}")
-        else:
-            lines.append("- name: (missing)")
+        """The per-turn note handed to the model.
+
+        Facts only. This used to restate the rules on every single turn -
+        "CRITICAL: Never ask again...", a full-sentence description of each
+        unasked topic, a "Guidance:" paragraph - which meant ~1,500 characters
+        of instruction re-read on top of an already instruction-heavy prompt.
+        The rules live in `OPERATING_BLOCK` now and are stated once; this is
+        just the agent's memory of the call.
+        """
+        lines = ["ALREADY COLLECTED - do not ask for these again:"]
+        lines.append(f"- name: {self.full_name or '(not yet)'}")
         if self.phone:
-            rb = "read-back done" if self.phone_read_back else "needs one read-back confirm"
+            rb = "confirmed" if self.phone_read_back else "not read back yet"
             lines.append(f"- phone: {self.phone} ({rb})")
         else:
-            lines.append("- phone: (missing)")
-        if self.other_party_required:
-            if self.other_party_name:
-                lines.append(f"- other party: {self.other_party_name}")
-            else:
-                lines.append("- other party: (missing)")
-        else:
-            lines.append(
-                f"- other party: {self.other_party_name or '(optional / not required)'}"
-            )
+            lines.append("- phone: (not yet)")
+        if self.other_party_required or self.other_party_name:
+            lines.append(f"- other party: {self.other_party_name or '(not yet)'}")
         if self.incident_summary:
             short = self.incident_summary
             if len(short) > 120:
                 short = short[:117] + "..."
-            lines.append(f"- incident: {short}")
+            lines.append(f"- what happened: {short}")
         else:
-            lines.append("- incident: (missing)")
-        if self.callback_promised:
-            lines.append("- closing promise / questions asked: yes")
-        else:
-            lines.append("- closing promise / questions asked: (not yet)")
+            lines.append("- what happened: (not yet)")
 
         for name, value in self.optional_fields.items():
             text = str(value)
-            if len(text) > 90:
-                text = text[:87] + "..."
+            if len(text) > 80:
+                text = text[:77] + "..."
             lines.append(f"- {name}: {text}")
 
-        if self.asked_topics:
+        if self.closing_offered:
+            lines.append("- you have already offered the close")
+        elif still_unknown:
+            lines.append("STILL UNKNOWN: " + ", ".join(still_unknown))
+
+        if self.phone_attempts >= MAX_PHONE_ATTEMPTS and not self.phone:
             lines.append(
-                "Already raised (do not raise again): "
-                + ", ".join(sorted(self.asked_topics))
+                f"- phone: {self.phone_attempts} attempts, still not a valid "
+                f"number (heard: {self.phone_heard_raw or 'nothing usable'}). "
+                "Stop asking and move on."
             )
 
-        if still_unknown:
-            lines.append("")
-            lines.append(
-                "STILL UNKNOWN — a menu of things you could ask about, in no "
-                "particular order. Pick at most one, only if it fits what they "
-                "just said. Skipping all of them is fine:"
-            )
-            for topic in still_unknown:
-                lines.append(f"  · {topic}")
-
-        lines.append("")
-        lines.append(f"Guidance: {self.next_missing_prompt()}")
-        lines.append(
-            "CRITICAL: Never ask again for any field above that is not marked (missing)."
-        )
         return "\n".join(lines)
 
     def next_missing_prompt(self) -> str:
-        """Soft guidance, never a script.
-
-        The old version told the model to "ask only for the first missing
-        must-have", which turned the call into a fixed questionnaire. Retell
-        never did that - its prompt called the order "an order that feels
-        human" and left the choice to the model.
-        """
+        """One short line on where the call stands. Not a script."""
         missing = self.missing_must_haves()
         if not missing:
             if not self.caller_done:
                 return (
-                    "everything required is in. Do NOT hang up. Stay with the "
-                    "caller, answer what they ask, and let them lead until they "
-                    "tell you they are finished."
+                    "everything required is in. Do NOT hang up - stay with them "
+                    "and let them lead until they say they are finished."
                 )
-            return (
-                "the caller has said they are done — thank them and call end_call "
-                "with a short goodbye (no questions)."
-            )
-        if len(missing) == 1:
-            return (
-                f"still needed at some point: {missing[0]}. Ask for it when the "
-                "conversation gives you a natural opening, not as an interruption."
-            )
-        return (
-            "still needed at some point: "
-            + "; ".join(missing)
-            + ". Weave these in naturally, one per turn, in whatever order the "
-            "conversation makes easy. Never announce them as a list."
-        )
+            return "they are finished - thank them and call end_call."
+        return "still needed, whenever the conversation allows: " + "; ".join(missing)
 
     @property
     def full_name(self) -> str:
@@ -352,6 +357,17 @@ class CallState:
                 "user_fname": self.first_name,
                 "user_lname": self.last_name,
                 "user_phone": self.phone,
+                # Only present when we gave up on getting a dialable number.
+                # The firm should see what the caller actually said rather than
+                # an empty field, but must know it was never verified.
+                **(
+                    {
+                        "user_phone_unverified": self.phone_heard_raw,
+                        "user_phone_attempts": self.phone_attempts,
+                    }
+                    if self.phone_unverified and not self.phone
+                    else {}
+                ),
                 "other_party_name": self.other_party_name,
                 "incident_summary": self.incident_summary,
             },

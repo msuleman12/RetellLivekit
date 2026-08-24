@@ -142,16 +142,6 @@ _CLASSIFY_SCHEMA = {
     },
 }
 
-_CLASSIFY_SYSTEM = """You route a caller to the right legal intake specialist.
-
-Read everything said so far and return ONE category.
-
-{rules}
-
-Return "unclear" — never "other" — when the caller wants a lawyer but has not
-said enough to place the matter yet. "other" is only correct once they have
-clearly confirmed the matter is none of the five practice areas.
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +209,7 @@ async def classify_case_type_llm(transcript: str, *, timeout_s: float = 2.5):
                 messages=[
                     {
                         "role": "system",
-                        "content": _CLASSIFY_SYSTEM.format(
+                        "content": prompts.ROUTER_CLASSIFY_SYSTEM.format(
                             rules=prompts.ROUTER_CASE_TYPE_RULES
                         ),
                     },

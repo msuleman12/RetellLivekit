@@ -71,8 +71,13 @@ async def main() -> int:
         and "other driver" in agent.instructions.lower(),
     )
     check(
-        "prompt forbids a fixed question order",
-        "There is NO fixed question order" in agent.instructions,
+        "follow-ups are a menu, not a queue",
+        "never a queue to work" in agent.instructions,
+    )
+    check(
+        "appended guidance stays close to Retell's own prompt",
+        len(agent.instructions) / len(prompts.ACCIDENT_PROMPT) < 1.7,
+        f"{len(agent.instructions) / len(prompts.ACCIDENT_PROMPT):.2f}x",
     )
     check(
         "begin message is the Claire greeting",

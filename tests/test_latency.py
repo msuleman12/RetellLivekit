@@ -29,9 +29,11 @@ class ResolveLatencyHelpersTests(unittest.TestCase):
         self.assertEqual(settings.resolve_latency_profile("FAST"), "fast")
         self.assertEqual(settings.resolve_latency_profile("  Fast  "), "fast")
 
-    def test_resolve_latency_profile_unknown_falls_back_to_parity(self) -> None:
-        self.assertEqual(settings.resolve_latency_profile("nope"), "parity")
-        self.assertEqual(settings.resolve_latency_profile(""), "parity")
+    def test_resolve_latency_profile_unknown_falls_back_to_fast(self) -> None:
+        """Default flipped to `fast`: `parity` leaves turn detection on
+        LiveKit's cloud TurnDetector, which costs a 1-2s round-trip per turn."""
+        self.assertEqual(settings.resolve_latency_profile("nope"), "fast")
+        self.assertEqual(settings.resolve_latency_profile(""), "fast")
 
     def test_parity_stt_endpointing_default(self) -> None:
         self.assertEqual(settings.resolve_stt_endpointing_ms("parity", None), 450)
@@ -60,11 +62,13 @@ class ResolveLatencyHelpersTests(unittest.TestCase):
         self.assertEqual(settings.resolve_endpointing("parity", 0.95), (0.193, 3.693))
 
     def test_fast_endpointing_caps_max_delay(self) -> None:
-        self.assertEqual(settings.resolve_endpointing("fast", 1.0), (0.1, 1.2))
+        self.assertEqual(settings.resolve_endpointing("fast", 1.0), (0.8, 2.5))
         # Even with low responsiveness, fast still caps the max.
         min_d, max_d = settings.resolve_endpointing("fast", 0.5)
-        self.assertLessEqual(max_d, 1.2)
-        self.assertLessEqual(min_d, 0.1)
+        self.assertLessEqual(max_d, 2.5)
+        # A floor, not a ceiling: never commit a turn faster than 0.8s, so a
+        # pause in the middle of a sentence does not become a new turn.
+        self.assertGreaterEqual(min_d, 0.8)
 
 
 class BuildTurnHandlingTests(unittest.TestCase):

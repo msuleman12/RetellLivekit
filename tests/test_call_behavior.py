@@ -56,12 +56,13 @@ class CollectedSummaryTests(unittest.TestCase):
         state = CallState()
         text = state.collected_summary()
         self.assertIn("ALREADY COLLECTED", text)
-        self.assertIn("name: (missing)", text)
+        self.assertIn("name: (not yet)", text)
         # The block used to say "Next: ask only for the first missing
         # must-have", which turned the call into a questionnaire. It is now
         # soft guidance the model may reorder around the conversation.
-        self.assertIn("Guidance:", text)
-        self.assertNotIn("ask only for the first missing", text)
+        # Facts only now - the rules live in OPERATING_BLOCK, stated once.
+        self.assertNotIn("CRITICAL", text)
+        self.assertNotIn("Guidance:", text)
 
     def test_summary_after_name_and_phone(self) -> None:
         state = CallState()
@@ -71,8 +72,8 @@ class CollectedSummaryTests(unittest.TestCase):
         text = state.collected_summary()
         self.assertIn("Jordan Lee", text)
         self.assertIn("2145550199", text)
-        self.assertIn("read-back done", text)
-        self.assertNotIn("name: (missing)", text)
+        self.assertIn("confirmed", text)
+        self.assertNotIn("name: (not yet)", text)
 
 
 class EndCallGateTests(unittest.IsolatedAsyncioTestCase):

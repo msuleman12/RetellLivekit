@@ -23,7 +23,13 @@ from __future__ import annotations
 import logging
 import re
 
-from .state import CallState, normalize_phone, phone_digit_count
+from .state import (
+    MAX_PHONE_ATTEMPTS,
+    CallState,
+    extract_phone_digits,
+    normalize_phone,
+    phone_digit_count,
+)
 
 logger = logging.getLogger("bushbush.capture")
 
@@ -239,9 +245,12 @@ def auto_capture_from_utterance(state: CallState, text: str) -> list[str]:
             notes.append(f"name={state.full_name}")
             logger.info("auto-captured name: %s", state.full_name)
 
+    heard_digits = extract_phone_digits(raw)
+
     if heard_phone:
         if not state.phone:
             state.phone = heard_phone
+            state.phone_heard_raw = heard_digits
             notes.append(f"phone={heard_phone}")
             logger.info("auto-captured phone: %s", heard_phone)
             if affirmed:
@@ -252,6 +261,33 @@ def auto_capture_from_utterance(state: CallState, text: str) -> list[str]:
             state.phone_read_back = True
             notes.append("phone_read_back=confirmed (repeated)")
             logger.info("auto-confirmed phone via repeated digits")
+        elif state.phone != heard_phone and not state.phone_read_back:
+            # A correction. The old code locked the first number in forever, so
+            # a caller fixing a mis-hear was ignored while the agent kept
+            # asking. An unconfirmed number is always replaceable.
+            logger.info("phone corrected: %s -> %s", state.phone, heard_phone)
+            state.phone = heard_phone
+            state.phone_heard_raw = heard_digits
+            notes.append(f"phone={heard_phone} (corrected)")
+    elif len(heard_digits) >= 7:
+        # Enough digits to be an attempt at a number, but not a usable one.
+        # Count it so the agent knows when to stop asking, and keep what was
+        # said so the firm is not left with an empty field.
+        state.phone_attempts += 1
+        state.phone_heard_raw = heard_digits
+        notes.append(f"phone_attempt={state.phone_attempts} (heard {heard_digits})")
+        logger.info(
+            "phone attempt %d unusable: heard %r", state.phone_attempts, heard_digits
+        )
+        if state.phone_attempts >= MAX_PHONE_ATTEMPTS and not state.phone:
+            state.phone_unverified = True
+            notes.append("phone_unverified=True (stopped asking)")
+            logger.warning(
+                "giving up on a valid phone after %d attempts; recording %r "
+                "unverified",
+                state.phone_attempts,
+                heard_digits,
+            )
     elif (
         state.phone
         and not state.phone_read_back

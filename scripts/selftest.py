@@ -89,14 +89,18 @@ def main() -> int:
         f"{parity_ep[0]} / {parity_ep[1]}",
     )
     fast_ep = settings.resolve_endpointing("fast", 1.0)
+    # 0.8 floor / 2.5 ceiling: a caller pausing mid-sentence used to have the
+    # turn committed under them, splitting one answer into four turns.
     check(
-        "fast endpointing caps max_delay at 1.2s",
-        fast_ep == (0.1, 1.2),
+        "fast endpointing floors min_delay at 0.8s, caps max at 2.5s",
+        fast_ep == (0.8, 2.5),
         f"{fast_ep[0]} / {fast_ep[1]}",
     )
+    # Default flipped to `fast`: `parity` leaves turn detection on LiveKit's
+    # cloud TurnDetector, which adds a 1-2s round-trip to every caller turn.
     check(
-        "resolve_latency_profile rejects unknown",
-        settings.resolve_latency_profile("nope") == "parity",
+        "resolve_latency_profile falls back to fast",
+        settings.resolve_latency_profile("nope") == "fast",
     )
     check(
         f"loaded profile={settings.call.latency_profile}",
@@ -158,7 +162,8 @@ def main() -> int:
         check(
             f"{case_type}: prompt carries the Retell text",
             "Bush and Bush" in agent.instructions
-            and prompts.HANDBOOK_BLOCK in agent.instructions,
+            and prompts.DELIVERY_BLOCK in agent.instructions
+            and prompts.OPERATING_BLOCK in agent.instructions,
         )
 
     print("\nmust-have tracking (speech capture + programmatic close)")

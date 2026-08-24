@@ -116,14 +116,24 @@ def resolve_endpointing(profile: str, responsiveness: float) -> tuple[float, flo
     min 0.1 / max 1.2 was too eager. A caller telling their story pauses to
     think, and at 1.2s the turn was committed regardless — one sentence became
     four turns, four turns became four queued LLM replies, and the queue is what
-    timed out. 0.35 still answers a finished sentence promptly; 2.5 gives a
-    thinking pause room to finish before the agent jumps in.
+    timed out. The floor was raised to 0.4s, and 0.4s was still not enough: a
+    live call chopped single answers into fragments like
+
+        "I can"  ->  "it's happened in California and the intersection..."
+        "I"      ->  "know about the other person name because he's go away..."
+
+    with `end_of_turn` logged as 0ms and several turns committed while the
+    caller was mid-sentence (`last_final_transcript_time` earlier than
+    `last_speaking_time`). Every fragment costs another LLM round-trip and
+    another chance to speak over the caller, so the floor is now 0.8s — still
+    prompt on a finished sentence, but it rides out the pause in the middle of
+    one. 2.5s remains the ceiling for a long thinking pause.
     """
     min_delay, max_delay = endpointing_delays(responsiveness)
     if profile == "fast":
-        # `max`, not `min` — 0.35 is a floor that lets a chopped-up utterance
-        # settle into one turn, not a ceiling that makes the agent even twitchier.
-        min_delay = max(min_delay, 0.4)
+        # `max`, not `min` — this is a floor that lets a chopped-up utterance
+        # settle into one turn, not a ceiling that makes the agent twitchier.
+        min_delay = max(min_delay, 0.8)
         max_delay = min(max_delay, 2.5)
     return min_delay, max_delay
 

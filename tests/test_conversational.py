@@ -112,13 +112,21 @@ class GuidanceIsNotAScriptTests(unittest.TestCase):
         self.assertIn("Do NOT hang up", guidance)
         self.assertIn("let them lead", guidance)
 
+    def test_answered_topics_are_named_not_described(self) -> None:
+        state = CallState(case_type="accident")
+        menu = LiveExtractor("accident").still_unknown(state)
+        self.assertTrue(all(" " not in t for t in menu), "field names only")
+
     def test_optional_topics_are_offered_as_a_menu(self) -> None:
         state = CallState(case_type="accident")
         menu = LiveExtractor("accident").still_unknown(state)
         self.assertTrue(menu)
         summary = state.collected_summary(menu)
-        self.assertIn("STILL UNKNOWN", summary)
-        self.assertIn("in no particular order", summary)
+        self.assertIn("STILL UNKNOWN:", summary)
+        # Names only. The old version pasted a full sentence of description per
+        # topic into every single request.
+        self.assertNotIn("—", summary)
+        self.assertLess(len(summary), 600, "the per-turn note must stay small")
 
     def test_answered_topics_leave_the_menu(self) -> None:
         state = CallState(case_type="accident")
@@ -127,10 +135,44 @@ class GuidanceIsNotAScriptTests(unittest.TestCase):
         state.record_optional("police_report", True)
         self.assertFalse(any(m.startswith("police_report") for m in extractor.still_unknown(state, limit=99)))
 
-    def test_prompt_forbids_a_fixed_question_order(self) -> None:
+    def test_prompt_stays_close_to_the_retell_original(self) -> None:
+        """The appended guidance must not swamp Retell's own prompt.
+
+        It reached 2.4x the original, 45 prohibition lines, with "read the
+        phone back once" stated in four different blocks. That is why the agent
+        stopped sounding like a receptionist."""
         composed = prompts.compose(prompts.ACCIDENT_PROMPT)
-        self.assertIn("There is NO fixed question order", composed)
-        self.assertIn("keep the conversation going", composed)
+        ratio = len(composed) / len(prompts.ACCIDENT_PROMPT)
+        self.assertLess(ratio, 1.7, f"appended guidance has grown again ({ratio:.1f}x)")
+        self.assertIn("Follow the caller", composed)
+        self.assertIn("never a queue to work", composed)
+
+    def test_appended_blocks_do_not_restate_the_retell_prompt(self) -> None:
+        """The rule that keeps this from growing back.
+
+        Every block appended below the Retell prompt exists only to say
+        something Retell's own text does not. When that rule lapsed, "read the
+        phone back once" ended up stated in four separate places and the agent
+        started behaving like a rule-follower instead of a receptionist.
+        """
+        import re
+
+        retell = prompts.ACCIDENT_PROMPT.lower()
+        appended = (prompts.DELIVERY_BLOCK + prompts.OPERATING_BLOCK).lower()
+        for label, pattern in (
+            ("reading the number back", r"read.{0,8}back"),
+            ("one question per turn", r"one question per turn"),
+            ("never talking over the caller", r"talk over"),
+            ("no legal advice", r"legal advice"),
+            ("the end_call preconditions", r"forbidden"),
+        ):
+            with self.subTest(instruction=label):
+                if re.search(pattern, retell):
+                    self.assertIsNone(
+                        re.search(pattern, appended),
+                        f"{label!r} is already in the Retell prompt - "
+                        "the appended blocks must not repeat it",
+                    )
 
 
 class LiveExtractorMergeTests(unittest.TestCase):

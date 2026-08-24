@@ -66,8 +66,10 @@ class AutoCaptureTests(unittest.TestCase):
         summary = state.collected_summary()
         self.assertIn("Jordan Lee", summary)
         self.assertIn("2145550199", summary)
-        self.assertNotIn("name: (missing)", summary)
-        self.assertIn("CRITICAL", summary)
+        self.assertNotIn("name: (not yet)", summary)
+        # The note is facts only now; "do not re-ask" is stated once in
+        # OPERATING_BLOCK rather than shouted on every turn.
+        self.assertIn("ALREADY COLLECTED", summary)
 
     def test_captures_other_party_and_dont_know(self) -> None:
         state = CallState()

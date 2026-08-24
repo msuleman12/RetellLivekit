@@ -20,20 +20,12 @@ from typing import Any
 import aiohttp
 from livekit.agents import AgentSession
 
-from . import settings
+from . import prompts, settings
 from .schemas import FIELDS_BY_CASE_TYPE, field_guide, json_schema_for
 from .state import CallState, is_valid_us_number
 
 logger = logging.getLogger("bushbush.postcall")
 
-SYSTEM_PROMPT = """You extract structured intake data from a phone call transcript for a law firm.
-
-Rules:
-- Only record what the caller actually said. Never infer, never fill a gap with a plausible guess.
-- If a field was not discussed, or you are not confident what was said, return null for it.
-- Phone numbers: digits only, exactly 10 US digits. If fewer than 10 digits were said, return null.
-- Do not assess the strength of the case, do not give legal opinions.
-"""
 
 
 def build_transcript(session: AgentSession) -> tuple[str, list[dict[str, Any]]]:
@@ -171,7 +163,7 @@ async def analyze(
             model=settings.llm.post_call_model,
             response_format={"type": "json_schema", "json_schema": schema},
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": prompts.POST_CALL_SYSTEM},
                 {
                     "role": "user",
                     "content": (

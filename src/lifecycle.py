@@ -17,16 +17,11 @@ import time
 
 from livekit.agents import AgentSession
 
-from . import settings
+from . import prompts, settings
 from .state import CallState
 
 logger = logging.getLogger("bushbush.lifecycle")
 
-REMINDER_INSTRUCTION = (
-    "The caller has gone quiet. In ONE short warm sentence, check they are still "
-    "there. Do NOT re-ask their name, phone, or any ALREADY COLLECTED field. "
-    "Do not start a new topic and do not add a second question."
-)
 
 
 class CallLifecycle:
@@ -87,7 +82,21 @@ class CallLifecycle:
             self._touch()
 
     def _on_agent_state(self, ev) -> None:  # AgentStateChangedEvent
-        if getattr(ev, "new_state", None) != "speaking":
+        new_state = getattr(ev, "new_state", None)
+
+        # Leaving "speaking" or "thinking" means the caller's silence only
+        # STARTS now. Without this the idle clock kept running while the agent
+        # was thinking and talking - on a turn where generation plus playback
+        # took 11 seconds, `idle` was already past the 10s reminder threshold
+        # the instant the agent fell silent, so "Are you still there?" fired
+        # ~165ms after the agent's own question and talked straight over the
+        # caller's answer. The reminder is for a caller who has gone quiet,
+        # not for one who has not been given a chance to speak yet.
+        if new_state == "listening":
+            self._touch()
+            return
+
+        if new_state != "speaking":
             return
         started = self._user_final_at
         if started is None:
@@ -206,6 +215,12 @@ class CallLifecycle:
                     # the agent is thinking or speaking; not really silence
                     continue
 
+                # The caller has started talking but the transcript has not
+                # landed yet. Nudging now is how the agent ends up saying
+                # "Are you still there?" on top of "My name is John Smith."
+                if getattr(self._session, "user_state", None) == "speaking":
+                    continue
+
                 due = reminder_after * (self._reminders_sent + 1)
                 if self._reminders_sent < max_reminders and idle >= due:
                     self._reminders_sent += 1
@@ -213,7 +228,7 @@ class CallLifecycle:
                     logger.debug("sending silence reminder %d", self._reminders_sent)
                     self._session.generate_reply(
                         instructions=(
-                            REMINDER_INSTRUCTION
+                            prompts.SILENCE_REMINDER_INSTRUCTION
                             + "\n"
                             + self._state.collected_summary()
                         )

@@ -28,7 +28,7 @@ import json
 import logging
 from typing import Any
 
-from . import settings
+from . import prompts, settings
 from .schemas import FIELDS_BY_CASE_TYPE, AnalysisField
 from .state import CallState, is_valid_us_number
 
@@ -39,25 +39,6 @@ _MUST_HAVE_NAMES = frozenset(
     {"user_fname", "user_lname", "user_phone", "other_party_name"}
 )
 
-SYSTEM_PROMPT = """You are a silent note-taker listening to a live legal intake call.
-
-You never speak to the caller and you never decide what happens next. You only
-record what has ALREADY been said, out loud, in the transcript below.
-
-Rules:
-- Record only what the caller actually said. Never infer, never complete a
-  half-given answer, never fill a gap with something plausible.
-- If something has not been said yet, or you are not confident you heard it
-  right, return null. A null is always better than a guess.
-- Names: only when the caller gave them as their own name. "Moss Ali" answered
-  to "what's your name" counts. A name they mention in the story does not.
-- Phone: digits only, exactly the ten US digits the caller spoke. If they gave a
-  country code, drop it. If fewer than ten real digits were spoken, return null.
-- other_party_name is the OTHER side - the person, employer, property, or
-  provider the caller is in dispute with. Never the caller. Never the law firm.
-  If the caller clearly said they do not know, return exactly "I don't know".
-- Do not assess the case, do not give opinions, do not summarise the agent.
-"""
 
 
 def _optional_fields(case_type: str) -> tuple[AnalysisField, ...]:
@@ -245,7 +226,7 @@ class LiveExtractor:
             temperature=0,
             response_format={"type": "json_schema", "json_schema": self._schema},
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": prompts.LIVE_EXTRACT_SYSTEM},
                 {
                     "role": "user",
                     "content": (
@@ -327,18 +308,21 @@ class LiveExtractor:
 
     # ------------------------------------------------------------------
     def still_unknown(self, state: CallState, limit: int = 6) -> tuple[str, ...]:
-        """A short menu of optional topics nobody has covered.
+        """Field names only, for the per-turn note.
 
-        Deliberately unordered from the model's point of view and capped, so it
-        reads as "here are some things you could ask" rather than a queue to
-        work through. `CONVERSATIONAL_BLOCK` in the prompt says as much.
+        This used to return `name — full description`, six of them, which put
+        roughly 700 characters of prose into every request and read like a list
+        of questions to get through. The names alone are enough for a model
+        that already has the practice area in its prompt, and they read as what
+        they are: things nobody has mentioned yet. `OPERATING_BLOCK` explains
+        once that this is a menu, not a queue.
         """
         fields = {f.name: f for f in _optional_fields(state.case_type or self.case_type)}
         out: list[str] = []
-        for name, f in fields.items():
+        for name in fields:
             if name in state.optional_fields or name in state.asked_topics:
                 continue
-            out.append(f"{name} — {f.description}")
+            out.append(name)
             if len(out) >= limit:
                 break
         return tuple(out)
