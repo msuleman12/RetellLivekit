@@ -168,11 +168,32 @@ def uses_elevenlabs_dictionary() -> bool:
 # ---------------------------------------------------------------------------
 # VAD
 # ---------------------------------------------------------------------------
+def _turn_detector_min_silence() -> float:
+    """Shortest VAD silence the streaming TurnDetector will accept.
+
+    LiveKit refuses to start the session if the VAD ends a turn sooner than the
+    detector can see it - `vad min_silence_duration=0.2s is too low for the
+    TurnDetector`. Read the requirement from the library rather than hard-coding
+    0.25s, so a future version bumping the constant does not crash the worker.
+    """
+    try:
+        from livekit.agents.voice.audio_recognition import MIN_SILENCE_DURATION_MS
+
+        return (MIN_SILENCE_DURATION_MS + 50) / 1000
+    except Exception:  # pragma: no cover - constant moved or renamed
+        return 0.25
+
+
 def build_vad() -> silero.VAD:
     silence_s = settings.stt.endpointing_ms / 1000
     if not settings.call.is_fast:
         # Parity: keep the VAD from cutting the caller off before Deepgram finalises.
         silence_s = max(0.4, silence_s)
+    if settings.call.semantic_turns:
+        # The VAD no longer decides the turn, it only tells the detector that
+        # speech paused - so this is a floor imposed by the detector, not a
+        # latency choice. The detector then decides whether the caller is done.
+        silence_s = max(silence_s, _turn_detector_min_silence())
     return silero.VAD.load(
         min_silence_duration=silence_s,
         min_speech_duration=0.05,
@@ -183,29 +204,45 @@ def build_vad() -> silero.VAD:
 #   Retell: interruption_sensitivity 0.85, responsiveness 0.95,
 #           enable_dynamic_responsiveness false
 # ---------------------------------------------------------------------------
+def build_turn_detection() -> object:
+    """Decide when the caller has stopped talking.
+
+    ``"vad"`` means silence alone: after N ms of quiet the turn is over, whether
+    or not the sentence was finished. That is what let "So my name is" and
+    "I was" become turns of their own, each with its own reply.
+
+    The alternative is a small model that reads the transcript and predicts
+    whether a person would carry on. `version="v1-mini"` is the ~108MB local
+    build - it runs in the worker's own inference executor, so unlike the
+    hosted `v1` detector it adds no network round-trip. Download it once with:
+
+        python -m livekit.agents download-files
+
+    Set TURN_DETECTION=vad in .env to go back to silence-only.
+    """
+    if not settings.call.semantic_turns:
+        logger.info("turn detection: VAD only (TURN_DETECTION=vad)")
+        return "vad"
+    try:
+        from livekit.agents import inference
+
+        detector = inference.TurnDetector(version="v1-mini", local_fallback=True)
+        logger.info("turn detection: local semantic model (turn-detector-v1-mini)")
+        return detector
+    except Exception as exc:
+        logger.warning(
+            "semantic turn detector unavailable (%s); falling back to VAD. "
+            "Run `python -m livekit.agents download-files` to install it.",
+            exc,
+        )
+        return "vad"
+
+
 def build_turn_handling() -> TurnHandlingOptions:
     min_delay, max_delay = settings.call.endpointing
     fast = settings.call.is_fast
 
-    # CRITICAL: AgentSession defaults turn_detection to inference.TurnDetector()
-    # when the key is omitted. Fast MUST set "vad" explicitly or the cloud
-    # detector still runs (~1–2s transport RTT on many networks).
-    turn_detection: object
-    if fast or not settings.call.use_turn_detector:
-        turn_detection = "vad"
-        if fast:
-            logger.info(
-                "LATENCY_PROFILE=fast: turn_detection=vad "
-                "(explicit; avoids default cloud TurnDetector)"
-            )
-    else:
-        try:
-            from livekit.agents import inference
-
-            turn_detection = inference.TurnDetector()
-        except Exception as exc:  # pragma: no cover - depends on cloud access
-            logger.warning("turn detector unavailable, falling back to VAD: %s", exc)
-            turn_detection = "vad"
+    turn_detection = build_turn_detection()
 
     interruption: InterruptionOptions = {
         "enabled": True,

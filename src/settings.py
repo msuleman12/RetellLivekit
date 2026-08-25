@@ -107,7 +107,9 @@ def resolve_responsiveness(profile: str, env_raw: str | None = None) -> float:
     return 1.0 if profile == "fast" else 0.95
 
 
-def resolve_endpointing(profile: str, responsiveness: float) -> tuple[float, float]:
+def resolve_endpointing(
+    profile: str, responsiveness: float, *, semantic: bool = False
+) -> tuple[float, float]:
     """Endpointing delays for the fast profile.
 
     min 0.1 / max 1.2 was too eager. A caller telling their story pauses to
@@ -127,12 +129,20 @@ def resolve_endpointing(profile: str, responsiveness: float) -> tuple[float, flo
     one. 2.5s remains the ceiling for a long thinking pause.
     """
     min_delay, max_delay = endpointing_delays(responsiveness)
-    if profile == "fast":
-        # `max`, not `min` — this is a floor that lets a chopped-up utterance
-        # settle into one turn, not a ceiling that makes the agent twitchier.
-        min_delay = max(min_delay, 0.8)
-        max_delay = min(max_delay, 2.5)
-    return min_delay, max_delay
+    if profile != "fast":
+        return min_delay, max_delay
+
+    if semantic:
+        # A model is deciding whether the caller is finished, so the delay no
+        # longer has to be long enough to ride out every pause on its own. It
+        # only has to cover the model's own inference, which is tens of ms
+        # locally. The wide ceiling is what the detector uses when it thinks
+        # the sentence is unfinished - it is a budget, not a wait.
+        return max(min_delay, 0.35), 4.0
+
+    # VAD only: no idea whether the sentence is finished, so the floor has to
+    # be long enough to ride out a mid-sentence pause by brute force.
+    return max(min_delay, 0.8), 2.5
 
 
 def stability_from_voice_temperature(temperature: float) -> float:
@@ -286,7 +296,20 @@ class CallSettings:
     noise_cancellation: str = field(
         default_factory=lambda: _str("NOISE_CANCELLATION", "BVCTelephony")
     )
+    #: "eou" runs a small local model that reads the transcript and decides
+    #: whether the caller has finished; "vad" goes on silence alone. The model
+    #: is what lets the endpointing floor come back down - without it the only
+    #: way to stop the agent answering "So my name is" is to make every turn
+    #: wait longer.
+    turn_detection: str = field(
+        default_factory=lambda: _str("TURN_DETECTION", "eou").lower()
+    )
     use_turn_detector: bool = field(default_factory=lambda: _bool("USE_TURN_DETECTOR", True))
+    #: How long to wait for the rest of a sentence before answering the part we
+    #: have. Only applies to utterances that read as cut off mid-thought.
+    unfinished_grace_ms: int = field(
+        default_factory=lambda: _int("UNFINISHED_GRACE_MS", 2_000)
+    )
 
     # Retell `boosted_keywords` -> Deepgram nova-3 keyterms.
     #
@@ -328,7 +351,13 @@ class CallSettings:
 
     @property
     def endpointing(self) -> tuple[float, float]:
-        return resolve_endpointing(self.latency_profile, self.responsiveness)
+        return resolve_endpointing(
+            self.latency_profile, self.responsiveness, semantic=self.semantic_turns
+        )
+
+    @property
+    def semantic_turns(self) -> bool:
+        return self.turn_detection != "vad" and self.use_turn_detector
 
 
 @dataclass(frozen=True)

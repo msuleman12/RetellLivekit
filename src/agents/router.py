@@ -27,6 +27,7 @@ from .. import models, prompts, settings
 from ..capture import utterance_text
 from ..routing import classify_case_type, classify_case_type_llm
 from ..state import CallState
+from ..turntaking import FragmentBuffer
 from .accident import AccidentAgent
 from .base import finish_session, flatten_transcript
 from .employment import EmploymentAgent
@@ -83,10 +84,21 @@ class RouterAgent(Agent):
         # A classification that outran its inline budget. It keeps running; its
         # verdict is collected at the top of the next turn.
         self._pending: asyncio.Task | None = None
+        # One sentence, one routing decision. See src/turntaking.py.
+        self._fragments = FragmentBuffer(
+            grace_s=settings.call.unfinished_grace_ms / 1000
+        )
+        # The handoff happens from two places - the turn itself, and a late
+        # classification landing between turns. Both go through this lock, and
+        # `_routed` makes the second one a no-op, so the caller can never be
+        # handed to two agents.
+        self._route_lock = asyncio.Lock()
+        self._routed = False
 
     async def on_exit(self) -> None:
         if self._pending and not self._pending.done():
             self._pending.cancel()
+        await self._fragments.aclose()
 
     async def on_enter(self) -> None:
         state: CallState = self.session.userdata
@@ -103,8 +115,18 @@ class RouterAgent(Agent):
         if state.call_ended:
             raise StopResponse()
 
+        # Do not route on half a sentence. "I was" and "So my name is" were
+        # each classified and answered on their own; now they are merged into
+        # the next utterance and classified once.
+        merged = self._fragments.take(utterance_text(new_message))
+        if self._fragments.should_hold(merged):
+            self._fragments.hold(self.session, merged)
+            raise StopResponse()
+        self._fragments.release()
+
         state.user_turns += 1
-        text = utterance_text(new_message)
+        text = merged
+        new_message.content = [merged]
 
         transcript = flatten_transcript(turn_ctx, text)
 
@@ -152,8 +174,8 @@ class RouterAgent(Agent):
                 raise StopResponse()
 
         if case and case in AGENTS_BY_CASE_TYPE:
-            self._handoff(state, case, chat_ctx=self.chat_ctx)
-            raise StopResponse()
+            if await self._route(state, case):
+                raise StopResponse()
 
         # Still unplaced: ask one more clarifying question. Retell never hung up
         # on a caller who wanted a lawyer just because the matter was fuzzy.
@@ -187,7 +209,38 @@ class RouterAgent(Agent):
         if self._pending and not self._pending.done():
             self._pending.cancel()
         self._pending = task
+        # Do not make the caller wait for it, but do not throw it away either:
+        # act on it the moment it lands, if the router is idle and has not
+        # already routed. Anything that arrives while the agent is speaking is
+        # picked up by `_collect_pending` on the next turn instead.
+        task.add_done_callback(self._on_late_verdict)
         return None
+
+    def _on_late_verdict(self, task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        asyncio.create_task(self._apply_late_verdict(task))
+
+    async def _apply_late_verdict(self, task: asyncio.Task) -> None:
+        try:
+            verdict = task.result()
+        except Exception:  # pragma: no cover - classify_* swallows its own
+            return
+        if verdict not in AGENTS_BY_CASE_TYPE:
+            return
+        try:
+            session = self.session
+            if session.agent_state != "listening":
+                return  # mid-reply; the next turn will collect it
+            state: CallState = session.userdata
+        except Exception:  # pragma: no cover - agent no longer active
+            return
+        if state.call_ended:
+            return
+        if self._pending is task:
+            self._pending = None
+        logger.info("late classification landed; routing to %s", verdict)
+        await self._route(state, verdict)
 
     def _collect_pending(self):
         """Verdict from a task parked by a previous turn, if it has landed."""
@@ -213,6 +266,15 @@ class RouterAgent(Agent):
             for line in transcript.splitlines()
             if line.startswith("User: ")
         )
+
+    async def _route(self, state: CallState, case_type: str) -> bool:
+        """Hand off exactly once. Returns True if this call did the handoff."""
+        async with self._route_lock:
+            if self._routed:
+                return False
+            self._routed = True
+            self._handoff(state, case_type, chat_ctx=self.chat_ctx)
+            return True
 
     def _handoff(
         self, state: CallState, case_type: str, *, chat_ctx: llm.ChatContext

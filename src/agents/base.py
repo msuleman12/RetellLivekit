@@ -44,6 +44,7 @@ from ..extract import LiveExtractor
 from ..models import uses_elevenlabs_dictionary
 from ..pronunciation import apply_pronunciation
 from ..state import CallState
+from ..turntaking import FragmentBuffer
 
 logger = logging.getLogger("bushbush.agent")
 
@@ -150,6 +151,11 @@ class BaseIntakeAgent(Agent):
             chat_ctx=chat_ctx if chat_ctx is not None else NOT_GIVEN,
         )
         self._greet = greet
+        # Holds an utterance that stopped mid-sentence and merges it into the
+        # next one, so one sentence is one reply. See src/turntaking.py.
+        self._fragments = FragmentBuffer(
+            grace_s=settings.call.unfinished_grace_ms / 1000
+        )
         # Sticky base prompt; ALREADY COLLECTED is appended via update_instructions
         # so we never mutate turn_ctx (that invalidates preemptive generation).
         self._base_instructions = composed
@@ -212,6 +218,7 @@ class BaseIntakeAgent(Agent):
             )
 
     async def on_exit(self) -> None:
+        await self._fragments.aclose()
         if self._extract_task and not self._extract_task.done():
             self._extract_task.cancel()
 
@@ -221,9 +228,21 @@ class BaseIntakeAgent(Agent):
         state: CallState = self.session.userdata
         if state.call_ended:
             raise StopResponse()
+        # Merge anything held back from a cut-off utterance, and decide whether
+        # this one is finished. A held turn is answered by the grace timer if
+        # the caller never continues, so this can never cause dead air.
+        merged = self._fragments.take(utterance_text(new_message))
+        if self._fragments.should_hold(merged):
+            self._fragments.hold(self.session, merged)
+            raise StopResponse()
+        self._fragments.release()
+
         state.user_turns += 1
 
-        text = utterance_text(new_message)
+        # Rewrite the message so the model, the capture pass and the transcript
+        # all see the whole sentence rather than its last fragment.
+        text = merged
+        new_message.content = [merged]
 
         # Inline fast-path: phone digits and read-back confirmation are
         # deterministic and worth having before the model comes back.
