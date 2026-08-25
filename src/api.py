@@ -6,9 +6,9 @@ opening the LiveKit console.
 
     uvicorn src.api:app --host 0.0.0.0 --port 8000
 
-Every route requires the `x-api-key` header to match `API_KEY` in `.env`.
+Every route except `/health` requires the `x-api-key` header to match `API_KEY` in `.env`.
 
-    GET  /health                    liveness + config problems
+    GET  /health                    liveness
     GET  /config                    the effective Retell-parity settings
     GET  /agents                    the router and the five intake agents
     GET  /agents/{case_type}/prompt the exact prompt an agent runs
@@ -20,12 +20,13 @@ Every route requires the `x-api-key` header to match `API_KEY` in `.env`.
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import uuid
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from google.protobuf.duration_pb2 import Duration
 from livekit import api as lkapi
 from pydantic import BaseModel, Field
@@ -42,10 +43,13 @@ app = FastAPI(title="Bush & Bush intake agent", version="1.0.0")
 # ---------------------------------------------------------------------------
 # auth
 # ---------------------------------------------------------------------------
-async def require_api_key(x_api_key: str = Header(default="")) -> None:
-    if not settings.api.api_key:
+async def require_api_key(
+    x_api_key: Annotated[str, Header()] = "",
+) -> None:
+    expected = settings.api.api_key
+    if not expected:
         raise HTTPException(500, "API_KEY is not configured on the server")
-    if x_api_key != settings.api.api_key:
+    if not hmac.compare_digest(x_api_key.encode("utf-8"), expected.encode("utf-8")):
         raise HTTPException(401, "invalid or missing x-api-key header")
 
 
@@ -78,8 +82,8 @@ class OutboundCallRequest(BaseModel):
 # routes
 # ---------------------------------------------------------------------------
 @app.get("/health")
-async def health() -> dict[str, Any]:
-    return {"status": "ok", "config_problems": settings.validate()}
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
 
 
 @app.get("/config", dependencies=[Auth])
@@ -137,6 +141,7 @@ async def config() -> dict[str, Any]:
             "webhook_configured": bool(settings.post_call.webhook_url),
             "records_dir": str(settings.post_call.records_dir),
         },
+        "config_problems": settings.validate(),
     }
 
 
@@ -170,17 +175,10 @@ async def agent_prompt(case_type: str) -> dict[str, Any]:
     cls = AGENTS_BY_CASE_TYPE.get(case_type)
     if cls is None:
         raise HTTPException(404, f"unknown case_type {case_type!r}")
-    prompt_map = {
-        "accident": prompts.ACCIDENT_PROMPT,
-        "employment": prompts.EMPLOYMENT_PROMPT,
-        "premises": prompts.PREMISES_PROMPT,
-        "malpractice": prompts.MALPRACTICE_PROMPT,
-        "harassment": prompts.HARASSMENT_PROMPT,
-    }
     return {
         "case_type": case_type,
         "name": cls.retell_agent_name,
-        "instructions": prompts.compose(prompt_map[case_type]),
+        "instructions": prompts.compose(cls.source_prompt),
     }
 
 
@@ -254,7 +252,9 @@ async def outbound_call(req: OutboundCallRequest) -> dict[str, Any]:
 
 
 @app.get("/calls", dependencies=[Auth])
-async def list_calls(limit: int = 50) -> dict[str, Any]:
+async def list_calls(
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> dict[str, Any]:
     directory = settings.post_call.records_dir
     if not directory.exists():
         return {"calls": []}
@@ -264,6 +264,7 @@ async def list_calls(limit: int = 50) -> dict[str, Any]:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
+            logger.debug("skipping unreadable call record %s", path.name, exc_info=True)
             continue
         record = payload.get("call", {})
         analysis = record.get("call_analysis", {})
@@ -285,11 +286,19 @@ async def list_calls(limit: int = 50) -> dict[str, Any]:
 
 @app.get("/calls/{call_id}", dependencies=[Auth])
 async def get_call(call_id: str) -> dict[str, Any]:
+    if any(ch in call_id for ch in "*?[]/\\"):
+        raise HTTPException(400, "invalid call_id")
     directory = settings.post_call.records_dir
-    for path in sorted(directory.glob("*.json"), reverse=True):
+    if not directory.exists():
+        raise HTTPException(404, f"no record for call_id {call_id!r}")
+    candidates = sorted(directory.glob(f"*_{call_id}.json"), reverse=True)
+    if not candidates:
+        candidates = sorted(directory.glob("*.json"), reverse=True)
+    for path in candidates:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
+            logger.debug("skipping unreadable call record %s", path.name, exc_info=True)
             continue
         if payload.get("call", {}).get("call_id") == call_id:
             return payload

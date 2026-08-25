@@ -7,6 +7,7 @@ comment above each one.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import httpx as _httpx
 from livekit.agents import NOT_GIVEN, EndpointingOptions, InterruptionOptions, TurnHandlingOptions
@@ -85,6 +86,21 @@ def build_router_llm() -> openai.LLM:
         temperature=settings.llm.router_temperature,
         api_key=settings.llm.api_key or NOT_GIVEN,
     )
+
+
+def build_async_openai(*, max_retries: int | None = None) -> Any:
+    """Shared AsyncOpenAI client for routing, live extract, and post-call.
+
+    Do not construct this per caller turn — each instance opens its own TLS
+    pool, which is hundreds of ms of dead air. Callers that need a singleton
+    should keep the return value.
+    """
+    from openai import AsyncOpenAI
+
+    kwargs: dict[str, Any] = {"api_key": settings.llm.api_key or None}
+    if max_retries is not None:
+        kwargs["max_retries"] = max_retries
+    return AsyncOpenAI(**kwargs)
 
 
 # ---------------------------------------------------------------------------

@@ -28,7 +28,9 @@ from typing import AsyncIterable
 from livekit import api, rtc
 from livekit.agents import (
     Agent,
+    AgentSession,
     ModelSettings,
+    NOT_GIVEN,
     RunContext,
     StopResponse,
     function_tool,
@@ -44,6 +46,42 @@ from ..pronunciation import apply_pronunciation
 from ..state import CallState
 
 logger = logging.getLogger("bushbush.agent")
+
+
+def last_assistant_text(turn_ctx: llm.ChatContext) -> str:
+    """Most recent assistant utterance in the turn context."""
+    for item in reversed(list(turn_ctx.items)):
+        if getattr(item, "role", None) == "assistant":
+            return utterance_text(item)
+    return ""
+
+
+def flatten_transcript(turn_ctx: llm.ChatContext, latest_user_text: str = "") -> str:
+    """Flatten chat history for the extractor / classifier.
+
+    The turn that just finished is not necessarily in `turn_ctx` yet, so
+    `latest_user_text` is appended when it is missing.
+    """
+    lines: list[str] = []
+    for item in turn_ctx.items:
+        role = getattr(item, "role", None)
+        if role not in ("user", "assistant"):
+            continue
+        text = (getattr(item, "text_content", None) or "").strip()
+        if text:
+            lines.append(f"{'Agent' if role == 'assistant' else 'User'}: {text}")
+    latest = (latest_user_text or "").strip()
+    if latest and lines[-1:] != [f"User: {latest}"]:
+        lines.append(f"User: {latest}")
+    return "\n".join(lines)
+
+
+def _room_is_already_gone(exc: BaseException) -> bool:
+    code = str(getattr(exc, "code", "") or getattr(exc, "status", "")).lower()
+    if code in {"not_found", "404"}:
+        return True
+    msg = str(exc).lower()
+    return "not_found" in msg or "does not exist" in msg
 
 
 async def hangup() -> None:
@@ -62,15 +100,16 @@ async def hangup() -> None:
         await job_ctx.api.room.delete_room(
             api.DeleteRoomRequest(room=job_ctx.room.name)
         )
-    except Exception as exc:  # pragma: no cover
-        msg = str(exc).lower()
-        if "not_found" in msg or "does not exist" in msg:
+    except Exception as exc:
+        if _room_is_already_gone(exc):
             logger.debug("hangup room already gone (console): %s", exc)
         else:
             logger.warning("could not delete room on hangup: %s", exc)
 
 
-async def finish_session(session, state: CallState, farewell: str, reason: str) -> None:
+async def finish_session(
+    session: AgentSession, state: CallState, farewell: str, reason: str
+) -> None:
     """Speak farewell, mark ended, hang up, close session."""
     if state.call_ended:
         return
@@ -82,16 +121,11 @@ async def finish_session(session, state: CallState, farewell: str, reason: str) 
     # completion from there can wait on the very task doing the waiting. Let it
     # finish in the background and move on.
     try:
-        await asyncio.wait_for(asyncio.shield(asyncio.ensure_future(session.aclose())), 5)
+        await asyncio.wait_for(asyncio.shield(asyncio.create_task(session.aclose())), 5)
     except asyncio.TimeoutError:
         logger.debug("session aclose still finishing in the background")
     except Exception:
         logger.debug("session aclose after hangup", exc_info=True)
-
-
-async def finish_call(ctx, farewell: str, reason: str) -> None:
-    """Compatibility wrapper used by router decline / tests."""
-    await finish_session(ctx.session, ctx.userdata, farewell, reason)
 
 
 class BaseIntakeAgent(Agent):
@@ -102,10 +136,19 @@ class BaseIntakeAgent(Agent):
     begin_message: str = ""
     other_party_label: str = "the other party"
     require_other_party: bool = True
+    source_prompt: str = ""
 
-    def __init__(self, *, prompt: str, greet: bool, **kwargs) -> None:
-        composed = prompts.compose(prompt)
-        super().__init__(instructions=composed, **kwargs)
+    def __init__(
+        self,
+        *,
+        greet: bool,
+        chat_ctx: llm.ChatContext | None = None,
+    ) -> None:
+        composed = prompts.compose(self.source_prompt)
+        super().__init__(
+            instructions=composed,
+            chat_ctx=chat_ctx if chat_ctx is not None else NOT_GIVEN,
+        )
         self._greet = greet
         # Sticky base prompt; ALREADY COLLECTED is appended via update_instructions
         # so we never mutate turn_ctx (that invalidates preemptive generation).
@@ -184,7 +227,9 @@ class BaseIntakeAgent(Agent):
 
         # Inline fast-path: phone digits and read-back confirmation are
         # deterministic and worth having before the model comes back.
-        notes = auto_capture_from_utterance(state, text)
+        notes = auto_capture_from_utterance(
+            state, text, previous_agent_text=last_assistant_text(turn_ctx)
+        )
 
         # Model-driven capture runs in the background so the caller never waits
         # on it. Its results are picked up by the next turn's instruction block.
@@ -215,7 +260,7 @@ class BaseIntakeAgent(Agent):
         if len(latest_user_text.split()) < 3:
             return
 
-        transcript = self._transcript_from(turn_ctx, latest_user_text)
+        transcript = flatten_transcript(turn_ctx, latest_user_text)
         if not transcript.strip():
             return
 
@@ -231,27 +276,6 @@ class BaseIntakeAgent(Agent):
                 await self._refresh_instructions(state, extra)
 
         self._extract_task = asyncio.create_task(_run())
-
-    @staticmethod
-    def _transcript_from(turn_ctx: llm.ChatContext, latest_user_text: str = "") -> str:
-        """Flatten the conversation for the extractor.
-
-        The turn that just finished is not necessarily in `turn_ctx` yet, and it
-        is usually the one carrying the answer we are trying to record, so it is
-        appended explicitly.
-        """
-        lines: list[str] = []
-        for item in turn_ctx.items:
-            role = getattr(item, "role", None)
-            if role not in ("user", "assistant"):
-                continue
-            text = (getattr(item, "text_content", None) or "").strip()
-            if text:
-                lines.append(f"{'Agent' if role == 'assistant' else 'User'}: {text}")
-        latest = (latest_user_text or "").strip()
-        if latest and not lines[-1:] == [f"User: {latest}"]:
-            lines.append(f"User: {latest}")
-        return "\n".join(lines)
 
     async def _refresh_instructions(self, state: CallState, notes: list[str]) -> None:
         """Re-hang the ALREADY COLLECTED / STILL UNKNOWN block off the base prompt.

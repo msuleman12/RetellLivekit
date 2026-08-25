@@ -1,0 +1,16 @@
+---
+description: Do not add a test suite unless asked; keep scripts as ops tools only
+globs: "scripts/**/*.py"
+alwaysApply: false
+---
+
+# Scripts
+
+There is no `tests/` tree. Do not add unittest/pytest packages or a `tests/` folder unless the user asks.
+
+Ops scripts only:
+
+- `scripts/setup_sip.py` — LiveKit inbound trunk + dispatch rule (`--dry-run` / `--list` before `--replace`)
+- `scripts/list_voices.py` — list ElevenLabs voices; `--set` writes `.env`
+
+Keep `sys.path` inserts in scripts (this repo is not an installed package). Dummy keys belong only in throwaway CLIs, never in `src/`.

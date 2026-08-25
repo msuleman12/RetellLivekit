@@ -60,8 +60,7 @@ src/
     accident.py employment.py premises.py malpractice.py harassment.py
 scripts/
   setup_sip.py    one-time trunk + dispatch rule creation
-  selftest.py     offline checks, no keys needed
-  test_accident.py  offline turn-by-turn walkthrough of an accident call
+  list_voices.py  list ElevenLabs voices and write ELEVEN_VOICE_ID
 ```
 
 ---
@@ -78,12 +77,6 @@ pip install -r requirements.txt
 
 copy .env.example .env
 notepad .env
-```
-
-Then check the mapping is intact before you spend a single API call:
-
-```powershell
-python scripts\selftest.py
 ```
 
 ### Keys you need
@@ -165,7 +158,7 @@ Every route needs `x-api-key: <API_KEY from .env>`.
 
 | Method | Path | What it does |
 |---|---|---|
-| GET | `/health` | liveness + a list of anything unconfigured |
+| GET | `/health` | liveness |
 | GET | `/config` | the effective settings, with the Retell values traceable |
 | GET | `/agents` | the router and the five specialists |
 | GET | `/agents/{case_type}/prompt` | the exact prompt an agent is running |
@@ -299,9 +292,8 @@ dialed.
   `LLMStream` subclasses. The router is the tool-less agent here. When this was
   wired up, every router reply 400'd and the agent went completely silent: the
   greeting still played, because `session.say()` is TTS only and never reaches
-  the LLM, so the call sounded connected but never answered. `tests/
-  test_llm_request.py` asserts on the request the plugin builds so this cannot
-  come back.
+  the LLM, so the call sounded connected but never answered. Do not reintroduce
+  either parameter on `build_router_llm()` or any `tools=[]` agent.
 
 - `USE_TURN_DETECTOR=true` uses LiveKit's semantic turn detector. It needs
   LiveKit Cloud reachability; if it can't start, the agent falls back to VAD and

@@ -11,7 +11,7 @@ four agents it is not marked required. So `other_party_required` is False here
 
 from __future__ import annotations
 
-from livekit.agents import NOT_GIVEN, llm
+from livekit.agents import llm
 
 from .. import prompts
 from .base import BaseIntakeAgent
@@ -23,10 +23,7 @@ class HarassmentAgent(BaseIntakeAgent):
     begin_message = prompts.HARASSMENT_BEGIN_MESSAGE
     other_party_label = "the person or employer involved, only if they offer it"
     require_other_party = False
+    source_prompt = prompts.HARASSMENT_PROMPT
 
     def __init__(self, *, greet: bool = False, chat_ctx: llm.ChatContext | None = None) -> None:
-        super().__init__(
-            prompt=prompts.HARASSMENT_PROMPT,
-            greet=greet,
-            chat_ctx=chat_ctx if chat_ctx is not None else NOT_GIVEN,
-        )
+        super().__init__(greet=greet, chat_ctx=chat_ctx)

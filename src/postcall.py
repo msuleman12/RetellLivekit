@@ -21,8 +21,9 @@ import aiohttp
 from livekit.agents import AgentSession
 
 from . import prompts, settings
+from .models import build_async_openai
 from .schemas import FIELDS_BY_CASE_TYPE, field_guide, json_schema_for
-from .state import CallState, is_valid_us_number
+from .state import CallState, normalize_phone
 
 logger = logging.getLogger("bushbush.postcall")
 
@@ -156,9 +157,7 @@ async def analyze(
 
     schema, guide = _analysis_schema(state.case_type)
     try:
-        from openai import AsyncOpenAI
-
-        client = AsyncOpenAI(api_key=settings.llm.api_key or None)
+        client = build_async_openai()
         completion = await client.chat.completions.create(
             model=settings.llm.post_call_model,
             response_format={"type": "json_schema", "json_schema": schema},
@@ -179,17 +178,15 @@ async def analyze(
             if key in ("call_summary", "user_sentiment", "call_successful", "in_voicemail"):
                 analysis[key] = value
             elif key == "user_phone":
-                # Retell's field says "must be a valid 10-digit US number", but
-                # a transcript-only reading will happily hand back something
-                # like 1290909490 (country code plus nine digits). Drop it
-                # rather than ship an unreachable number to the firm.
-                digits = "".join(ch for ch in str(value or "") if ch.isdigit())
-                if len(digits) == 11 and digits.startswith("1"):
-                    digits = digits[1:]
-                if is_valid_us_number(digits):
+                # Same NANP gate as live capture — drop unreachable numbers.
+                digits = normalize_phone(
+                    str(value or ""),
+                    allow_test=state.allow_test_phones,
+                )
+                if digits:
                     custom[key] = digits
                 elif value:
-                    logger.warning("post-call phone %r is not a valid US number", value)
+                    logger.warning("post-call phone is not a valid US number")
             elif value is not None:
                 custom[key] = value
     except Exception:

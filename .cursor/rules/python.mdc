@@ -1,0 +1,52 @@
+---
+description: Python style, typing, logging, errors, and dependency conventions
+globs: "**/*.py"
+alwaysApply: false
+---
+
+# Python conventions
+
+Match the files already in `src/`. Do not introduce Black/Ruff/mypy configs unless asked.
+
+```python
+from __future__ import annotations  # first line after the module docstring
+
+logger = logging.getLogger("bushbush.<module>")  # not root, not __name__
+```
+
+## Types
+
+- Use `X | None`, `list[str]`, `dict[str, Any]`, `tuple[str, ...]`. Avoid `Optional`/`List`/`Dict`.
+- Settings and schema objects are `@dataclass` (`frozen=True` for config).
+- Case types: `Literal["accident", "employment", "premises", "harassment", "malpractice", "other"]`.
+- Annotate public functions. Prefer `Path` over raw strings for files.
+
+## Errors and logging
+
+- Log failures with context; never swallow without `logger.debug(..., exc_info=True)` or `logger.exception`.
+- Optional plugins (noise cancellation, turn detector) warn and continue — do not crash the call.
+- Time-bound external I/O (`asyncio.wait_for`, `aiohttp.ClientTimeout`, httpx timeouts). Fail open for post-call analysis; fail closed for hangup/auth.
+- Do not log API keys, JWTs, or full `.env` values. Phone digits and names are client data — log presence/validity, not dump transcripts into INFO.
+
+```python
+# ❌ BAD
+except Exception:
+    pass
+
+# ✅ GOOD
+except Exception:
+    logger.exception("webhook delivery failed")
+```
+
+## Style
+
+- Module docstring states Retell equivalent and *why*, not a restatement of the filename.
+- Keep call-path code small. Put regexes, schemas, and conversion formulas in their dedicated modules.
+- No nested packages beyond `src/agents/`. New specialist = one thin subclass of `BaseIntakeAgent`.
+- Env reads go through `settings._str/_int/_float/_bool`, never scattered `os.getenv` in agents (exception: `ALLOW_TEST_PHONE_NUMBERS` in `state.py`).
+
+## Dependencies
+
+- Pin with `~=` in `requirements.txt`. Do not add pytest, redis, SQL, or extra LLM SDKs without a concrete need.
+- Import LiveKit plugins inside try/except when optional (`noise_cancellation`, cloud `TurnDetector`).
+- After dependency changes, restart the worker and hit `GET /health` plus `GET /config` (authenticated) before a live call.

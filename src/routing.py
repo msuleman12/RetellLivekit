@@ -21,10 +21,13 @@ was "Never decline on first unclear utterance — clarify first."
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
-from typing import Literal
+from typing import Any, Literal
+
+from . import prompts, settings
 
 logger = logging.getLogger("bushbush.routing")
 
@@ -153,20 +156,15 @@ _CLASSIFY_SCHEMA = {
 # moves — several hundred ms of dead air on every turn. A module-level client
 # keeps the connection pool warm across turns.
 # ---------------------------------------------------------------------------
-_client = None
+_client: Any = None
 
 
-def _get_client():
+def _get_client() -> Any:
     global _client
     if _client is None:
-        from openai import AsyncOpenAI
+        from .models import build_async_openai
 
-        from . import settings
-
-        _client = AsyncOpenAI(
-            api_key=settings.llm.api_key or None,
-            max_retries=0,  # the caller already falls back to a clarifying question
-        )
+        _client = build_async_openai(max_retries=0)
     return _client
 
 
@@ -183,7 +181,9 @@ def trim_transcript(transcript: str) -> str:
     return text[-_MAX_TRANSCRIPT_CHARS:]
 
 
-async def classify_case_type_llm(transcript: str, *, timeout_s: float = 2.5):
+async def classify_case_type_llm(
+    transcript: str, *, timeout_s: float = 2.5
+) -> str | None:
     """Retell's extract node. Returns a case type, "unclear", or None on error.
 
     Errors and timeouts return None so the caller falls back to asking one
@@ -192,11 +192,7 @@ async def classify_case_type_llm(transcript: str, *, timeout_s: float = 2.5):
     if not transcript.strip():
         return None
 
-    from . import prompts, settings
-
     try:
-        import asyncio
-
         client = _get_client()
         completion = await asyncio.wait_for(
             client.chat.completions.create(

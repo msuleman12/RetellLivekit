@@ -1,0 +1,47 @@
+---
+description: Project stack, layout, and non-negotiable design for the Bush & Bush LiveKit intake agent
+alwaysApply: true
+---
+
+# Architecture
+
+This is a **Python 3.10+** LiveKit rebuild of Bush & Bush Law Group's Retell intake: Claire greets inbound SIP, routes a case type, collects must-haves, then posts analysis. Do not add frameworks, dashboards, ORMs, databases, or a test suite unless asked. Follow the existing layout.
+
+## Stack (do not expand)
+
+- Voice: LiveKit Agents `~=1.6`, Deepgram STT, OpenAI LLM, ElevenLabs TTS, Silero VAD
+- Optional: LiveKit Cloud noise cancellation (`BVCTelephony`), cloud TurnDetector
+- Control: FastAPI + Uvicorn + Pydantic v2
+- HTTP: aiohttp (webhooks), python-dotenv
+- Telephony: Twilio SIP → LiveKit inbound trunk → this worker
+
+Two processes: `python -m src.worker` (calls) and `uvicorn src.api:app` (control API).
+
+## Module map
+
+| Path | Role |
+|---|---|
+| `src/settings.py` | All config + Retell→LiveKit conversion formulas |
+| `src/prompts.py` | Verbatim Retell prompts; edit here, never paraphrase in agents |
+| `src/schemas.py` | Post-call field definitions (source of truth for extract + webhook) |
+| `src/models.py` | STT/LLM/TTS/VAD/turn-handling factories + shared AsyncOpenAI |
+| `src/state.py` | Per-call `CallState`, NANP phone rules, `may_end_call()` |
+| `src/capture.py` | Inline regex fast-path (phone, read-back, sign-off) |
+| `src/extract.py` | Background live field capture (off by default) |
+| `src/routing.py` | Keyword pass then LLM classify |
+| `src/lifecycle.py` | Reminders, max duration, silence hangup |
+| `src/postcall.py` | Analysis + disk record + `call_analyzed` webhook |
+| `src/agents/` | `RouterAgent` + five `BaseIntakeAgent` specialists |
+| `src/worker.py` | Call entrypoint and shutdown → postcall |
+| `src/api.py` | Authenticated control API |
+
+## Non-negotiables
+
+- Preserve Retell parity: numeric settings live in `settings.py` with explicit conversion functions, not magic numbers in agents.
+- Prompts in `prompts.py` are copied verbatim. Changing call behaviour means editing prompts/settings, not inventing a new agent stack.
+- Handoff is `session.update_agent(..., chat_ctx=..., greet=False)` — never re-greet, never invent `transfer_*` tools.
+- Only `end_call` (gated by `CallState.may_end_call()`), router decline via `finish_session`, and lifecycle watchdogs may hang up. Capture/extract never end a call.
+- Do not pass `parallel_tool_calls` or `tool_choice` to a tool-less agent (the router). OpenAI 400s and the call goes silent after the greeting.
+- One agent registry: `AGENTS_BY_CASE_TYPE` in `src/agents/router.py`. New specialists get a `source_prompt` class attribute.
+- Phone digits go through `normalize_phone`. Prefer `asyncio.create_task` and `time.monotonic()` for watchdogs.
+- Prefer extending existing modules over new packages. Pin new deps with `~=` in `requirements.txt`.

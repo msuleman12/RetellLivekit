@@ -29,8 +29,9 @@ import logging
 from typing import Any
 
 from . import prompts, settings
+from .models import build_async_openai
 from .schemas import FIELDS_BY_CASE_TYPE, AnalysisField
-from .state import CallState, is_valid_us_number
+from .state import CallState, normalize_phone
 
 logger = logging.getLogger("bushbush.extract")
 
@@ -163,9 +164,7 @@ class LiveExtractor:
     # ------------------------------------------------------------------
     def _get_client(self) -> Any:
         if self._client is None:
-            from openai import AsyncOpenAI
-
-            self._client = AsyncOpenAI(api_key=settings.llm.api_key or None)
+            self._client = build_async_openai()
         return self._client
 
     async def run(self, state: CallState, transcript: str) -> list[str]:
@@ -245,22 +244,23 @@ class LiveExtractor:
         first = (raw.get("user_fname") or "").strip()
         last = (raw.get("user_lname") or "").strip()
         if first and not state.first_name:
-            state.first_name = first.title()
-            notes.append(f"first_name={state.first_name}")
+            state.first_name = first
+            notes.append("first_name")
         if last and not state.last_name:
-            state.last_name = last.title()
-            notes.append(f"last_name={state.last_name}")
+            state.last_name = last
+            notes.append("last_name")
 
-        phone = "".join(ch for ch in str(raw.get("user_phone") or "") if ch.isdigit())
-        if len(phone) == 11 and phone.startswith("1"):
-            phone = phone[1:]
-        if is_valid_us_number(phone) and not state.phone:
+        phone = normalize_phone(
+            str(raw.get("user_phone") or ""),
+            allow_test=state.allow_test_phones,
+        )
+        if phone and not state.phone:
             state.phone = phone
-            notes.append(f"phone={phone}")
+            notes.append("phone")
         if raw.get("phone_read_back_confirmed") is True and state.phone:
             if not state.phone_read_back:
                 state.phone_read_back = True
-                notes.append("phone_read_back=confirmed")
+                notes.append("phone_read_back")
 
         other = (raw.get("other_party_name") or "").strip()
         if other and not state.other_party_name:
@@ -269,41 +269,41 @@ class LiveExtractor:
             is_firm = "bush and bush" in lowered or "bush & bush" in lowered
             if not is_self and not is_firm:
                 state.other_party_name = other
-                notes.append(f"other_party={other}")
+                notes.append("other_party")
 
         summary = (raw.get("incident_summary") or "").strip()
         if summary and not state.incident_summary:
             state.incident_summary = summary[:500]
-            notes.append("incident=captured")
+            notes.append("incident")
 
         if raw.get("agent_offered_the_close") is True and not state.closing_offered:
             state.closing_offered = True
             state.callback_promised = True
-            notes.append("closing_offered=True")
+            notes.append("closing_offered")
 
         # Only meaningful once the close has actually been offered - otherwise a
         # caller who says "that's all" mid-story would unlock the hangup.
         finished = raw.get("caller_said_they_are_finished") is True
         if finished and state.closing_offered and not state.caller_done:
             state.caller_done = True
-            notes.append("caller_done=True")
+            notes.append("caller_done")
         elif not finished and state.caller_done:
             # They started talking again. Retell would have kept going, so do that.
             state.caller_done = False
-            notes.append("caller_done=False (still talking)")
+            notes.append("caller_done_revoked")
 
         for name in self._optional_names:
             if name in raw and state.record_optional(name, raw[name]):
-                notes.append(f"{name}={raw[name]!r}")
+                notes.append(name)
 
         raised = raw.get("topics_already_raised") or []
         if isinstance(raised, list):
             for topic in raised:
                 if isinstance(topic, str) and topic in self._optional_names:
                     state.asked_topics.add(topic)
- 
+
         if notes:
-            logger.info("live extraction: %s", ", ".join(notes))
+            logger.info("live extraction updated: %s", ", ".join(notes))
         return notes
 
     # ------------------------------------------------------------------

@@ -29,7 +29,7 @@ from livekit.agents import (
 from . import models, postcall, settings
 from .agents import RouterAgent
 from .lifecycle import CallLifecycle
-from .state import CallState
+from .state import CallState, mask_phone
 
 logging.basicConfig(
     level=logging.INFO,
@@ -73,6 +73,8 @@ async def entrypoint(ctx: JobContext) -> None:
     await ctx.connect()
 
     state = CallState(room_name=ctx.room.name, call_id=ctx.room.name)
+    # Console mic tests use 123-456-7890; production SIP still requires NANP.
+    state.allow_test_phones = (ctx.room.name or "").lower() == "console"
 
     participant = await ctx.wait_for_participant()
     attrs = dict(participant.attributes or {})
@@ -82,12 +84,12 @@ async def entrypoint(ctx: JobContext) -> None:
         state.call_id = sip_call_id
     ctx.log_context_fields = {
         "room": ctx.room.name,
-        "from": state.from_number,
+        "from": mask_phone(state.from_number) or "web",
     }
     logger.info(
         "call from %s to %s (latency_profile=%s)",
-        state.from_number or "web",
-        state.to_number or "-",
+        mask_phone(state.from_number) or "web",
+        mask_phone(state.to_number) or "-",
         settings.call.latency_profile,
     )
 

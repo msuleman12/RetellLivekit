@@ -13,8 +13,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-CASE_TYPES = ("accident", "employment", "premises", "harassment", "malpractice", "other")
-
 #: How many times to ask for the callback number before letting the call move
 #: on. A caller who has said it three times and is still being asked is having
 #: a worse experience than the firm gets value from a fourth attempt.
@@ -74,17 +72,20 @@ def extract_phone_digits(raw: str | None) -> str:
     return "".join(out)
 
 
-def is_valid_us_number(digits: str) -> bool:
+def is_valid_us_number(digits: str, *, allow_test: bool = False) -> bool:
     """NANP validity: 10 digits, area code and exchange both start 2-9.
 
     Retell's prompt said "ignore country code 1 if they say it" and "must be 10
     US digits".  Without this check a caller who says "+1 290-909-490" (country
     code plus only nine digits) produced the plausible-looking but impossible
     `1290909490`, and both the agent and the post-call webhook accepted it.
+
+    Console mic tests use numbers like 123-456-7890; pass ``allow_test=True``
+    (or ``ALLOW_TEST_PHONE_NUMBERS``) so those are accepted locally only.
     """
     if len(digits) != 10 or not digits.isdigit():
         return False
-    if _allow_test_numbers():
+    if allow_test or _allow_test_numbers():
         return True
     return digits[0] in "23456789" and digits[3] in "23456789"
 
@@ -100,7 +101,7 @@ def _allow_test_numbers() -> bool:
     )
 
 
-def normalize_phone(raw: str | None) -> str | None:
+def normalize_phone(raw: str | None, *, allow_test: bool = False) -> str | None:
     """Return a valid 10-digit US number, or None if we do not have one yet.
 
     This used to go hunting: on a digit string longer than 11 it scanned for
@@ -121,7 +122,7 @@ def normalize_phone(raw: str | None) -> str | None:
         digits = digits[1:]
     if len(digits) != 10:
         return None
-    return digits if is_valid_us_number(digits) else None
+    return digits if is_valid_us_number(digits, allow_test=allow_test) else None
 
 
 def phone_digit_count(raw: str | None) -> int:
@@ -130,6 +131,16 @@ def phone_digit_count(raw: str | None) -> int:
     if len(digits) == 11 and digits.startswith("1"):
         digits = digits[1:]
     return len(digits)
+
+
+def mask_phone(raw: str | None) -> str:
+    """Last four digits only, for logs. Empty input stays empty."""
+    if not raw or not str(raw).strip():
+        return ""
+    digits = extract_phone_digits(raw)
+    if len(digits) >= 4:
+        return f"***{digits[-4:]}"
+    return "***"
 
 
 @dataclass
@@ -194,6 +205,8 @@ class CallState:
     disconnect_reason: str = ""
     #: True once end_call / decline / silence hangup has committed to closing.
     call_ended: bool = False
+    #: True for LiveKit console sessions so 123-456-7890 style test numbers work.
+    allow_test_phones: bool = False
 
     # ------------------------------------------------------------------
     def record_name(self, first: str | None, last: str | None) -> None:
@@ -203,7 +216,7 @@ class CallState:
             self.last_name = last.strip()
 
     def record_phone(self, raw: str) -> bool:
-        normalized = normalize_phone(raw)
+        normalized = normalize_phone(raw, allow_test=self.allow_test_phones)
         if normalized is None:
             return False
         self.phone = normalized
@@ -310,6 +323,18 @@ class CallState:
         elif still_unknown:
             lines.append("STILL UNKNOWN: " + ", ".join(still_unknown))
 
+        if self.caller_done:
+            leftover = self.missing_must_haves()
+            if leftover:
+                lines.append(
+                    "- the caller is wrapping up; still needed: " + "; ".join(leftover)
+                )
+            else:
+                lines.append(
+                    "- the caller said they are finished — call end_call NOW "
+                    "with a short goodbye and ZERO questions. Do not ask anything else."
+                )
+
         if self.phone_attempts >= MAX_PHONE_ATTEMPTS and not self.phone:
             lines.append(
                 f"- phone: {self.phone_attempts} attempts, still not a valid "
@@ -328,7 +353,7 @@ class CallState:
                     "everything required is in. Do NOT hang up - stay with them "
                     "and let them lead until they say they are finished."
                 )
-            return "they are finished - thank them and call end_call."
+            return "they are finished - call end_call NOW, short goodbye, no questions."
         return "still needed, whenever the conversation allows: " + "; ".join(missing)
 
     @property

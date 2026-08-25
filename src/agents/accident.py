@@ -7,7 +7,7 @@ llm_8958198a4d30743b61f6340e2396 v26.
 
 from __future__ import annotations
 
-from livekit.agents import NOT_GIVEN, llm
+from livekit.agents import llm
 
 from .. import prompts
 from .base import BaseIntakeAgent
@@ -18,10 +18,7 @@ class AccidentAgent(BaseIntakeAgent):
     case_type = "accident"
     begin_message = prompts.ACCIDENT_BEGIN_MESSAGE
     other_party_label = "the other driver, or the other party"
+    source_prompt = prompts.ACCIDENT_PROMPT
 
     def __init__(self, *, greet: bool = False, chat_ctx: llm.ChatContext | None = None) -> None:
-        super().__init__(
-            prompt=prompts.ACCIDENT_PROMPT,
-            greet=greet,
-            chat_ctx=chat_ctx if chat_ctx is not None else NOT_GIVEN,
-        )
+        super().__init__(greet=greet, chat_ctx=chat_ctx)

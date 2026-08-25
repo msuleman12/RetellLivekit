@@ -17,6 +17,7 @@ import time
 
 from livekit.agents import AgentSession
 
+from .agents.base import hangup
 from . import prompts, settings
 from .state import CallState
 
@@ -28,11 +29,11 @@ class CallLifecycle:
     def __init__(self, session: AgentSession, state: CallState) -> None:
         self._session = session
         self._state = state
-        self._last_user_activity = time.time()
+        self._last_user_activity = time.monotonic()
         self._reminders_sent = 0
         self._tasks: list[asyncio.Task] = []
         self._closed = False
-        # Wall time of the latest final user transcript; used for reply-latency logs.
+        # Monotonic time of the latest final user transcript; used for reply-latency logs.
         self._user_final_at: float | None = None
         # Per-turn timing parts, keyed by speech_id, assembled from
         # `metrics_collected` and logged as one line once TTS reports in.
@@ -46,9 +47,8 @@ class CallLifecycle:
         self._session.on("agent_state_changed", self._on_agent_state)
         self._session.on("metrics_collected", self._on_metrics)
 
-        loop = asyncio.get_event_loop()
-        self._tasks.append(loop.create_task(self._silence_watchdog()))
-        self._tasks.append(loop.create_task(self._max_duration_watchdog()))
+        self._tasks.append(asyncio.create_task(self._silence_watchdog()))
+        self._tasks.append(asyncio.create_task(self._max_duration_watchdog()))
 
     async def aclose(self) -> None:
         self._closed = True
@@ -57,20 +57,22 @@ class CallLifecycle:
         for task in self._tasks:
             try:
                 await task
-            except (asyncio.CancelledError, Exception):  # noqa: B014
+            except asyncio.CancelledError:
                 pass
+            except Exception:
+                logger.debug("lifecycle task error during close", exc_info=True)
         self._tasks.clear()
 
     # -- activity tracking ---------------------------------------------
     def _touch(self) -> None:
-        self._last_user_activity = time.time()
+        self._last_user_activity = time.monotonic()
         self._reminders_sent = 0
 
     def _on_user_input(self, ev) -> None:  # UserInputTranscribedEvent
         if getattr(ev, "transcript", "").strip():
             self._touch()
             if getattr(ev, "is_final", False):
-                self._user_final_at = time.time()
+                self._user_final_at = time.monotonic()
 
     def _on_user_state(self, ev) -> None:  # UserStateChangedEvent
         if getattr(ev, "new_state", None) == "speaking":
@@ -102,7 +104,7 @@ class CallLifecycle:
         if started is None:
             return
         self._user_final_at = None
-        delta_ms = (time.time() - started) * 1000
+        delta_ms = (time.monotonic() - started) * 1000
         logger.info(
             "reply_latency_ms=%.0f profile=%s",
             delta_ms,
@@ -203,7 +205,7 @@ class CallLifecycle:
                     self._closed = True
                     return
 
-                idle = time.time() - self._last_user_activity
+                idle = time.monotonic() - self._last_user_activity
 
                 if idle >= hangup_after:
                     logger.info("hanging up after %.0fs of silence", idle)
@@ -261,8 +263,6 @@ class CallLifecycle:
             logger.exception("max duration watchdog failed")
 
     async def _hangup(self) -> None:
-        from .agents.base import hangup
-
         self._closed = True
         self._state.call_ended = True
         await hangup()

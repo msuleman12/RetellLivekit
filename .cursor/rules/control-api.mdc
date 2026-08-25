@@ -1,0 +1,38 @@
+---
+description: FastAPI control surface, post-call webhook, and analysis payload rules
+globs: "src/api.py,src/postcall.py,src/schemas.py"
+alwaysApply: false
+---
+
+# Control API and post-call
+
+## FastAPI
+
+- Every mutating/inspecting route uses `dependencies=[Auth]` (`x-api-key` == `settings.api.api_key`). `/health` stays public but must not expose secrets.
+- Request bodies: Pydantic v2 models (`SessionRequest`, `OutboundCallRequest`). Return typed models where they exist (`SessionResponse`).
+- Unknown `case_type` → `HTTPException(404)`. Missing/wrong API key → 401. Unconfigured `API_KEY` → 500.
+- `/config` returns **effective settings and Retell-traceable numbers**, never `LIVEKIT_API_SECRET`, OpenAI/Deepgram/ElevenLabs keys, or the raw `API_KEY`.
+- Outbound dial uses LiveKit SIP APIs already in `api.py`. Do not add a second booking agent or placeholder `example.com` tools.
+
+## Post-call contract
+
+Event name and payload shape are a Retell compatibility surface. Do not rename `event: "call_analyzed"` or the `call` / `call_analysis` / `custom_analysis_data` nesting.
+
+Precedence (highest first): live must-haves (NANP-validated phone) → post-call model over the full transcript → live `optional_fields` only as `setdefault` gaps.
+
+```python
+# ✅ phone from the post-call model must still pass NANP
+if is_valid_us_number(digits):
+    custom["user_phone"] = digits
+```
+
+- Write `call_records/<timestamp>_<call_id>.json` even if the webhook fails.
+- Webhook POST via aiohttp with `POST_CALL_WEBHOOK_TIMEOUT_MS`; log status, do not crash shutdown.
+- Cap analysis with `POST_CALL_ANALYSIS_TIMEOUT_MS`; on timeout save transcript-only payload.
+- Capture transcript in the worker shutdown callback **before** closing the session.
+
+## Schemas
+
+Field lists in `schemas.py` are copied from Retell `post_call_analysis_data`. Adding a field means: `AnalysisField` on the right case type and live extract descriptions if needed. Do not invent parallel field names (`firstName` vs `user_fname`).
+
+`/health` is public and returns only liveness. Config problems belong on authenticated `/config`. Compare API keys with `hmac.compare_digest`. Cap `GET /calls` with `Query(le=200)`.

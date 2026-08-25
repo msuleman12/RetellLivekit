@@ -17,9 +17,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
-
 # ---------------------------------------------------------------------------
 # small env helpers
 # ---------------------------------------------------------------------------
@@ -29,7 +26,7 @@ def _str(name: str, default: str = "") -> str:
 
 def _int(name: str, default: int) -> int:
     raw = os.getenv(name)
-    try: 
+    try:
         return int(raw) if raw not in (None, "") else default
     except ValueError:
         return default

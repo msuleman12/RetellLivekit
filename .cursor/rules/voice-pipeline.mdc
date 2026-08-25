@@ -1,0 +1,45 @@
+---
+description: LiveKit agent, routing, capture, and hangup rules for the voice path
+globs: "src/agents/**/*.py,src/worker.py,src/lifecycle.py,src/models.py,src/routing.py,src/capture.py,src/extract.py,src/state.py,src/pronunciation.py"
+alwaysApply: false
+---
+
+# Voice pipeline
+
+## Call flow
+
+`worker.entrypoint` builds `AgentSession[CallState]`, starts `RouterAgent`, attaches `CallLifecycle`. Shutdown captures transcript **before** `session.aclose()`, then `postcall.run`.
+
+Router: keyword `classify_case_type` on the full caller transcript, then `classify_case_type_llm` within `classify_inline_budget_ms`. Decline `other` only after a clarifying question (`router_asked_clarify`). Keyword pass never returns `other`.
+
+```python
+# ✅ handoff — keep chat_ctx, no re-greeting
+self.session.update_agent(agent_cls(chat_ctx=chat_ctx, greet=False))
+```
+
+New practice areas subclass `BaseIntakeAgent`, register in `AGENTS_BY_CASE_TYPE` / router `_AGENTS`, and add fields in `schemas.py` + prompts in `prompts.py`. Harassment keeps `require_other_party = False`.
+
+## Hangup gate
+
+`end_call` is the intake agents' only tool. It must refuse when `may_end_call()` is non-empty (tell the model what is missing; caller never hears the refusal). Goodbye must contain no `?`. Complete intake is not a hangup reason — the caller saying they are finished is.
+
+Lifecycle watchdogs (max duration, silence) and router polite-decline may call `finish_session`. Nothing in `capture.py` / `extract.py` hangs up.
+
+## Capture vs extract vs instructions
+
+- `capture.py`: instant, deterministic (phone digits, NANP, read-back, "I don't know", sign-off).
+- `extract.py`: background model; skip if `LIVE_EXTRACT_ENABLED` is false, utterance `< 3` words, or a prior extract is in flight. It only records.
+- Refresh Claire's memory with `update_instructions`, never by mutating `turn_ctx` (that kills preemptive generation).
+- `collected_summary()` is facts only — rules live in `prompts.py` once.
+
+## Models / latency
+
+- Fast profile **must** set `turn_detection="vad"`. Omitting it defaults to cloud TurnDetector (~1–2s RTT).
+- Do not set Deepgram `utterance_end_ms` or ElevenLabs `chunk_length_schedule`.
+- Do not put `parallel_tool_calls` / `tool_choice` on `build_router_llm()` or any `tools=[]` agent.
+- VAD is prewarmed per process in `worker.prewarm`.
+- Pronunciation: ElevenLabs dictionary if configured, else `pronunciation.apply_pronunciation` in `tts_node`.
+
+## Phone numbers
+
+Use `normalize_phone` / `is_valid_us_number` (NANP: 10 digits, area/exchange start 2–9). Never scan a longer digit string for "any valid window". Invalid → ask again; after `MAX_PHONE_ATTEMPTS` stop asking and flag unverified.

@@ -1,0 +1,34 @@
+---
+description: Secrets, PII, git, and production safety for intake calls
+alwaysApply: true
+---
+
+# Security and git
+
+## Secrets
+
+Never commit `.env`, `.env.*` (except `.env.example`), `sip_config.json`, `call_records/`, recordings, or log files. Those paths are gitignored on purpose.
+
+- Keys live in `.env`: LiveKit, Deepgram, OpenAI, ElevenLabs, `API_KEY`, webhook URL.
+- `.env.example` stays tracked and **empty of real credentials**. Document new variables there when you add `settings.py` fields.
+- Do not print secrets in `/health`, `/config`, logs, commit messages, or README snippets.
+- Control API: require `x-api-key`. Default `API_KEY=change-me` is local-only; treat it as misconfiguration in production.
+
+## Client data
+
+Call records contain names, phones, and incident details. Write them only under `CALL_RECORDS_DIR`. Do not add analytics that ship transcripts to a new third party.
+
+- Validate US numbers with NANP before storing or webhooking. Drop invalid values rather than guessing.
+- `ALLOW_TEST_PHONE_NUMBERS` is console-only. Never enable it in production.
+- Harassment intake: do not tighten conflict-check / `other_party_name` into a must-have.
+
+## Telephony cutover
+
+`scripts/setup_sip.py` prepares LiveKit trunks only. Changing Twilio origination moves the live number off Retell — do not do that from application code. Prefer a second test number before touching `+1 682 564 1506`.
+
+## Git / docs
+
+- Commit only when asked. Do not commit secrets or `call_records`.
+- Match existing message style: short, why-focused, complete sentences.
+- Behaviour changes that affect Retell parity belong in `README.md` (mapping table or deliberate differences) — no extra markdown files unless asked.
+- Change prompts in `src/prompts.py` and restart the worker; there is no draft/publish split.

@@ -28,7 +28,7 @@ from ..capture import utterance_text
 from ..routing import classify_case_type, classify_case_type_llm
 from ..state import CallState
 from .accident import AccidentAgent
-from .base import finish_session
+from .base import finish_session, flatten_transcript
 from .employment import EmploymentAgent
 from .harassment import HarassmentAgent
 from .malpractice import MalpracticeAgent
@@ -38,7 +38,7 @@ logger = logging.getLogger("bushbush.router")
 
 RETELL_AGENT_NAME = "Bush & Bush Law Group - Router"
 
-_AGENTS = {
+AGENTS_BY_CASE_TYPE = {
     "accident": AccidentAgent,
     "employment": EmploymentAgent,
     "premises": PremisesAgent,
@@ -106,7 +106,7 @@ class RouterAgent(Agent):
         state.user_turns += 1
         text = utterance_text(new_message)
 
-        transcript = self._transcript(turn_ctx, text)
+        transcript = flatten_transcript(turn_ctx, text)
 
         # Layer 0: a classification started on an earlier turn that came back
         # after the router had already spoken. Free — it is already resolved.
@@ -139,7 +139,7 @@ class RouterAgent(Agent):
             verdict = await self._classify_within_budget(transcript)
 
         if verdict is not None:
-            if verdict in _AGENTS:
+            if verdict in AGENTS_BY_CASE_TYPE:
                 case = verdict
             elif verdict == "other" and state.router_asked_clarify:
                 # Retell's polite-decline node: only reachable after a clarifying
@@ -151,7 +151,7 @@ class RouterAgent(Agent):
                 )
                 raise StopResponse()
 
-        if case and case in _AGENTS:
+        if case and case in AGENTS_BY_CASE_TYPE:
             self._handoff(state, case, chat_ctx=self.chat_ctx)
             raise StopResponse()
 
@@ -168,7 +168,7 @@ class RouterAgent(Agent):
         parked on ``self._pending``, where the next turn collects it for free —
         so a slow uplink costs one extra question, never dead air.
         """
-        task = asyncio.ensure_future(
+        task = asyncio.create_task(
             classify_case_type_llm(
                 transcript, timeout_s=settings.llm.classify_timeout_ms / 1000
             )
@@ -214,28 +214,6 @@ class RouterAgent(Agent):
             if line.startswith("User: ")
         )
 
-    @staticmethod
-    def _transcript(turn_ctx: llm.ChatContext, latest_user_text: str = "") -> str:
-        """Flatten the conversation for the classifier.
-
-        `latest_user_text` is passed in because the turn that just finished is
-        not necessarily in `turn_ctx` yet — and it is the one that decides the
-        routing, so leaving it out would classify the conversation as it stood
-        one turn ago.
-        """
-        lines: list[str] = []
-        for item in turn_ctx.items:
-            role = getattr(item, "role", None)
-            if role not in ("user", "assistant"):
-                continue
-            text = (getattr(item, "text_content", None) or "").strip()
-            if text:
-                lines.append(f"{'Agent' if role == 'assistant' else 'User'}: {text}")
-        latest = (latest_user_text or "").strip()
-        if latest and not lines[-1:] == [f"User: {latest}"]:
-            lines.append(f"User: {latest}")
-        return "\n".join(lines)
-
     def _handoff(
         self, state: CallState, case_type: str, *, chat_ctx: llm.ChatContext
     ) -> None:
@@ -244,5 +222,5 @@ class RouterAgent(Agent):
             {"to": case_type, "at": int(time.time() * 1000)}
         )
         logger.info("routing call to %s (no transfer tool)", case_type)
-        agent_cls = _AGENTS[case_type]
+        agent_cls = AGENTS_BY_CASE_TYPE[case_type]
         self.session.update_agent(agent_cls(chat_ctx=chat_ctx, greet=False))

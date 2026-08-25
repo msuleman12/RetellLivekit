@@ -6,16 +6,9 @@ from .employment import EmploymentAgent
 from .harassment import HarassmentAgent
 from .malpractice import MalpracticeAgent
 from .premises import PremisesAgent
+from .router import AGENTS_BY_CASE_TYPE
 from .router import RETELL_AGENT_NAME as ROUTER_AGENT_NAME
 from .router import RouterAgent
-
-AGENTS_BY_CASE_TYPE = {
-    "accident": AccidentAgent,
-    "employment": EmploymentAgent,
-    "premises": PremisesAgent,
-    "harassment": HarassmentAgent,
-    "malpractice": MalpracticeAgent,
-}
 
 __all__ = [
     "AccidentAgent",
