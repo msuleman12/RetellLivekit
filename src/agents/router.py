@@ -174,7 +174,10 @@ class RouterAgent(Agent):
                 raise StopResponse()
 
         if case and case in AGENTS_BY_CASE_TYPE:
-            if await self._route(state, case):
+            # `new_message` is this turn, and it is not in any chat context
+            # yet - see `_seed_chat_ctx`. Hand it to the routing path so the
+            # agent taking over starts with it.
+            if await self._route(state, case, pending_user_message=new_message):
                 raise StopResponse()
 
         # Still unplaced: ask one more clarifying question. Retell never hung up
@@ -267,22 +270,81 @@ class RouterAgent(Agent):
             if line.startswith("User: ")
         )
 
-    async def _route(self, state: CallState, case_type: str) -> bool:
+    async def _route(
+        self,
+        state: CallState,
+        case_type: str,
+        *,
+        pending_user_message: llm.ChatMessage | None = None,
+    ) -> bool:
         """Hand off exactly once. Returns True if this call did the handoff."""
         async with self._route_lock:
             if self._routed:
                 return False
             self._routed = True
-            self._handoff(state, case_type, chat_ctx=self.chat_ctx)
+            self._handoff(state, case_type, pending_user_message=pending_user_message)
             return True
 
+    def _seed_chat_ctx(self, pending: llm.ChatMessage | None) -> llm.ChatContext:
+        """The history the new agent starts from, including the turn in flight.
+
+        `Agent.chat_ctx` does not contain the message currently being handled.
+        LiveKit commits a user turn as part of generating the reply to it, and
+        this path raises `StopResponse` instead, so no reply is generated and
+        the turn is never committed anywhere - not to the router's context and
+        not to `session.history`.
+
+        That matters more here than anywhere else in the call. The utterance
+        that triggers routing is, almost by definition, the one where the
+        caller says what happened - routing is what recognising the matter
+        *is*. Losing it meant the intake agent opened by asking about the
+        thing it had just been told, and the firm's transcript never contained
+        the caller's own account of the incident.
+
+        Seeding the copy is free: an in-memory append, no model call, no
+        network. It costs one utterance of context per call and saves the
+        whole redundant turn that used to follow.
+        """
+        ctx = self.chat_ctx.copy()
+        if pending is not None and ctx.index_by_id(pending.id) is None:
+            ctx.items.append(pending)
+        return ctx
+
+    def _commit_to_history(self, pending: llm.ChatMessage | None) -> None:
+        """Put the same turn into `session.history`.
+
+        The session keeps its own transcript, fed by LiveKit as items are
+        added; seeding the new agent's context does not reach it. Without
+        this the model would remember the turn while `postcall.build_transcript`
+        - and so the record the firm receives - still would not.
+        """
+        if pending is None:
+            return
+        try:
+            history = self.session.history
+            if history.index_by_id(pending.id) is not None:
+                return
+            self.session._conversation_item_added(pending)
+        except Exception:  # pragma: no cover - private API, never worth a call
+            logger.warning(
+                "could not add the routing turn to session history; the model "
+                "still has it, the post-call transcript will not",
+                exc_info=True,
+            )
+
     def _handoff(
-        self, state: CallState, case_type: str, *, chat_ctx: llm.ChatContext
+        self,
+        state: CallState,
+        case_type: str,
+        *,
+        pending_user_message: llm.ChatMessage | None = None,
     ) -> None:
         state.case_type = case_type
         state.handoffs.append(
             {"to": case_type, "at": int(time.time() * 1000)}
         )
         logger.info("routing call to %s (no transfer tool)", case_type)
+        chat_ctx = self._seed_chat_ctx(pending_user_message)
+        self._commit_to_history(pending_user_message)
         agent_cls = AGENTS_BY_CASE_TYPE[case_type]
         self.session.update_agent(agent_cls(chat_ctx=chat_ctx, greet=False))
