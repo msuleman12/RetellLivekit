@@ -1,0 +1,44 @@
+# Bush & Bush LiveKit intake agent.
+#
+# Install:
+#   sudo cp deployment/bblg-livekit-agent.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now bblg-livekit-agent
+#
+# The worker must register under the same AGENT_NAME that the LiveKit SIP
+# dispatch rule names, or calls ring and drop. AGENT_NAME comes from .env.
+
+[Unit]
+Description=Bush & Bush LiveKit intake agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/var/www/bblg-livekit-agent
+EnvironmentFile=/var/www/bblg-livekit-agent/.env
+ExecStart=/var/www/bblg-livekit-agent/.venv/bin/python -m src.worker start
+
+# The single most valuable line in this file: if the worker crashes or the
+# LiveKit connection drops hard, callers get ring-then-silence and nobody
+# finds out until the firm complains. Restart unconditionally.
+Restart=always
+RestartSec=5
+# Do not give up after repeated restarts - a provider outage can bounce the
+# worker several times in a row and it must still come back on its own.
+StartLimitIntervalSec=0
+
+Environment="PATH=/var/www/bblg-livekit-agent/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+# Silero VAD and the turn detector run on onnxruntime. On a CPU-only box the
+# GPU probe is slow and noisy, so pin them to CPU explicitly.
+Environment=CUDA_VISIBLE_DEVICES=""
+Environment=ORT_DISABLE_GPU=1
+Environment=ONNXRUNTIME_EXECUTION_PROVIDERS=CPUExecutionProvider
+
+StandardOutput=append:/var/log/bblg-livekit-agent/agent.log
+StandardError=append:/var/log/bblg-livekit-agent/agent-error.log
+
+[Install]
+WantedBy=multi-user.target

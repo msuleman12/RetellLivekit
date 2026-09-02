@@ -1,0 +1,8 @@
+{
+  "_comment": "Record of the deployed inbound trunk. Credentials are deliberately omitted - see README.md. Numbers change via update_inbound_trunk_fields, so re-dump this file rather than editing it by hand.",
+  "sipTrunkId": "ST_e4YDr4WSECY2",
+  "trunk": {
+    "name": "My Inbound Spanish",
+    "numbers": ["+15183333620", "+13254425883"]
+  }
+}

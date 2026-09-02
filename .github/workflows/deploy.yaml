@@ -1,0 +1,100 @@
+# Deploy the LiveKit intake agent to the voice server.
+#
+# The server sits behind NetBird, so GitHub's hosted runners cannot reach it.
+# This uses a self-hosted runner on the VPN, the same way the ai-receptionist
+# pipeline does.
+#
+# Required secrets: KNOWN_HOST, PRIVATE_KEY
+name: Deploy LiveKit agent
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # Never let two deploys race for the same service.
+  group: deploy-livekit-agent
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    environment: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Bundle
+        run: |
+          tar --exclude='.git' \
+              --exclude='.venv' \
+              --exclude='__pycache__' \
+              --exclude='*.pyc' \
+              --exclude='call_records' \
+              -czf app.tar.gz .
+
+      - name: Copy to server
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.KNOWN_HOST }}
+          username: root
+          key: ${{ secrets.PRIVATE_KEY }}
+          source: app.tar.gz
+          target: /home/bblg-livekit-agent
+          overwrite: true
+
+      - name: Install and restart
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.KNOWN_HOST }}
+          username: root
+          key: ${{ secrets.PRIVATE_KEY }}
+          script: |
+            set -euo pipefail
+
+            mkdir -p /home/bblg-livekit-agent
+            cd /home/bblg-livekit-agent
+            tar --overwrite -xzf app.tar.gz
+            rm app.tar.gz
+
+            mkdir -p /var/www/bblg-livekit-agent
+            # .env holds the only copy of the API keys and call_records holds
+            # client data. Both stay on the server; --delete must never reach
+            # them.
+            rsync -a --delete \
+              --exclude='.env' \
+              --exclude='.venv/' \
+              --exclude='call_records/' \
+              /home/bblg-livekit-agent/ /var/www/bblg-livekit-agent/
+
+            cd /var/www/bblg-livekit-agent
+            [ -d .venv ] || python3 -m venv .venv
+            .venv/bin/pip install --upgrade pip --quiet
+            .venv/bin/pip install -r requirements.txt --quiet
+
+            mkdir -p /var/log/bblg-livekit-agent
+            cp deployment/bblg-livekit-agent.service \
+               /etc/systemd/system/bblg-livekit-agent.service
+            systemctl daemon-reload
+            systemctl enable bblg-livekit-agent.service
+            systemctl restart bblg-livekit-agent.service
+
+            # A unit can be "active" while the worker failed to register with
+            # LiveKit, and an unregistered worker takes no calls at all. Wait
+            # for the log line that proves registration, and fail the deploy
+            # if it never comes.
+            echo "waiting for worker registration..."
+            for i in $(seq 1 20); do
+              if journalctl -u bblg-livekit-agent.service --since '-60s' \
+                   | grep -q 'registered worker'; then
+                echo "worker registered ✓"
+                exit 0
+              fi
+              sleep 3
+            done
+
+            echo "ERROR: worker did not register within 60s" >&2
+            journalctl -u bblg-livekit-agent.service --since '-60s' | tail -40 >&2
+            exit 1
