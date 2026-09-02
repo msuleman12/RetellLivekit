@@ -75,4 +75,4 @@ Injuries / still in pain?, medical treatment?, passengers?, work/life impact?, o
 """
 
 
-ACCIDENT_BEGIN_MESSAGE = "Hi, thanks for calling Bush and Bush — this is Claire. How can I help you today?"
+ACCIDENT_BEGIN_MESSAGE = "Hi, thanks for calling Bush and Bush Law Group — this is Claire. How can I help you today?"

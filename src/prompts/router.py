@@ -53,7 +53,7 @@ ROUTER_DECLINE_INSTRUCTION = """Only run this after clarification showed the mat
 
 """RETELL_SOURCE: node other-matter-end.instruction.text"""
 
-ROUTER_BEGIN_MESSAGE = "Hi, thanks for calling Bush and Bush — this is Claire. How can I help you today?"
+ROUTER_BEGIN_MESSAGE = "Hi, thanks for calling Bush and Bush Law Group — this is Claire. How can I help you today?"
 
 
 """RETELL_SOURCE: llm_8958198a4d30743b61f6340e2396.begin_message (the flow's

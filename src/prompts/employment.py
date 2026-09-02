@@ -40,4 +40,4 @@ No legal advice. No fee/outcome predictions. Emergencies → 911/hotlines first.
 """
 
 
-EMPLOYMENT_BEGIN_MESSAGE = "Hi, thanks for calling Bush and Bush — this is Claire. I understand this is about a workplace matter — I'm here to help."
+EMPLOYMENT_BEGIN_MESSAGE = "Hi, thanks for calling Bush and Bush Law Group — this is Claire. I understand this is about a workplace matter — I'm here to help."

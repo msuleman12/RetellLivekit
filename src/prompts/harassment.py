@@ -42,4 +42,4 @@ No legal advice. No graphic probing. Immediate danger/self-harm → 911, Nationa
 """
 
 
-HARASSMENT_BEGIN_MESSAGE = "Hi, thanks for calling Bush and Bush — this is Claire. You're in the right place, and we'll take this carefully."
+HARASSMENT_BEGIN_MESSAGE = "Hi, thanks for calling Bush and Bush Law Group — this is Claire. You're in the right place, and we'll take this carefully."

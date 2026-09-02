@@ -43,4 +43,4 @@ No legal/medical advice. Active emergency → 911/ER first.
 """
 
 
-MALPRACTICE_BEGIN_MESSAGE = "Hi, thanks for calling Bush and Bush — this is Claire. I'm sorry you're going through this, and I'm here to help."
+MALPRACTICE_BEGIN_MESSAGE = "Hi, thanks for calling Bush and Bush Law Group — this is Claire. I'm sorry you're going through this, and I'm here to help."
