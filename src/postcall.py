@@ -20,7 +20,7 @@ from typing import Any
 import aiohttp
 from livekit.agents import AgentSession
 
-from . import prompts, settings
+from . import prompts, settings, webhook
 from .models import build_async_openai
 from .schemas import FIELDS_BY_CASE_TYPE, field_guide, json_schema_for
 from .state import CallState, normalize_phone
@@ -224,6 +224,21 @@ async def deliver(payload: dict[str, Any]) -> None:
         logger.exception("webhook delivery failed")
 
 
+async def deliver_zapier(payload: dict[str, Any], state: CallState) -> dict[str, Any]:
+    """POST the ai-receptionist-shaped payload to ZAPIER_WEBHOOK_URL.
+
+    Separate from `deliver` on purpose. The two endpoints want different
+    shapes and are owned by different systems, so one being down, slow or
+    unconfigured must not cost the other its delivery.
+    """
+    analysis = payload.get("call", {}).get("call_analysis", {})
+    return await webhook.send(
+        state,
+        dict(analysis.get("custom_analysis_data") or {}),
+        analysis.get("call_summary") or "",
+    )
+
+
 async def run(
     session: AgentSession,
     state: CallState,
@@ -254,6 +269,17 @@ async def run(
             settings.post_call.analysis_timeout_ms,
         )
         payload = _base_payload(state, transcript, transcript_object)
+
+    # The Zapier POST happens first so its outcome can be written into the
+    # record `deliver` saves. Without that, a Zap that silently stopped
+    # accepting calls leaves no trace anywhere on disk.
+    zap = await deliver_zapier(payload, state)
+    if zap.get("status") != "skipped":
+        payload["zapier_delivery"] = {
+            "status": zap.get("status"),
+            "error": zap.get("error"),
+            "response_status": zap.get("response_status"),
+        }
 
     await deliver(payload)
     return payload

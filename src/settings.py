@@ -363,6 +363,10 @@ class CallSettings:
 @dataclass(frozen=True)
 class PostCallSettings:
     webhook_url: str = field(default_factory=lambda: _str("POST_CALL_WEBHOOK_URL"))
+    #: The flat, Zapier-shaped payload the ai-receptionist build sent. Set this
+    #: only if the firm's existing Zap expects that shape - it is delivered in
+    #: addition to POST_CALL_WEBHOOK_URL, not instead of it. See src/webhook.py.
+    zapier_webhook_url: str = field(default_factory=lambda: _str("ZAPIER_WEBHOOK_URL"))
     webhook_timeout_ms: int = field(
         default_factory=lambda: _int("POST_CALL_WEBHOOK_TIMEOUT_MS", 10_000)
     )
