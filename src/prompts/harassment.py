@@ -29,7 +29,7 @@ heard — the system validates the number. Ask again only if STILL UNKNOWN says 
 phone is missing.
 
 # Follow-ups gently (one at a time)
-Nature of incidents, location, witnesses, reported to HR?, agency complaint?, evidence exists yes/no, work impact, retaliation, goal, best callback time.
+Nature of incidents, location, witnesses, reported to HR?, agency complaint?, evidence exists yes/no, work impact, retaliation, goal, best callback time, best way to reach them (call, text or email) and the email address if they say email.
 
 # Closing
 Only when enough is gathered: attorney will review personally and call back → ask once if anything else / any questions. If they sign off (bye, that's all, I'm done, nothing else, I don't want to add anything else, take care), call end_call immediately with a short goodbye and ZERO questions. Do not ask another question.
