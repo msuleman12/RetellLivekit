@@ -137,6 +137,20 @@ _OTHER_PARTY_PATTERNS: tuple[re.Pattern[str], ...] = (
     ),
 )
 
+# Claire asking for the store / property / employer, or reading one back.
+_PLACE_QUESTION = re.compile(
+    r"\b(store|property|business|grocery|employer|company|hospital|clinic|"
+    r"where (?:you|it) (?:fell|happened|slipped)|"
+    r"name of (?:the )?(?:place|store|property|business|grocery))\b",
+    re.IGNORECASE,
+)
+_AGENT_PLACE_READBACK = re.compile(
+    r"(?:you mentioned|i have(?:\s+it)?\s+as|the (?:store|property|business|"
+    r"grocery store|employer|company) (?:is|was|called|named))\s+"
+    r"(.+?)(?:[,?]|\s+is\s+that|\s+right\s*[?]?\s*$|$)",
+    re.IGNORECASE,
+)
+
 # Strong enough to be "what happened", not a greeting that happens to
 # mention yesterday. "Yesterday. I need some help from your side." must
 # not lock incident_summary before the actual story arrives.
@@ -244,6 +258,8 @@ def is_closing_done(text: str) -> bool:
         "that's it",
         "thats it",
         "that's everything",
+        "that's everything from my side",
+        "thats everything from my side",
         "i'm done",
         "im done",
         "i am done",
@@ -259,12 +275,47 @@ def is_closing_done(text: str) -> bool:
     return bool(_CLOSING_DONE.search(raw))
 
 
-def extract_other_party(text: str) -> str | None:
+def extract_other_party(text: str, previous_agent_text: str = "") -> str | None:
     raw = (text or "").strip()
     if not raw:
         return None
     if _DONT_KNOW.search(raw):
         return "I don't know"
+
+    if previous_agent_text and _PLACE_QUESTION.search(previous_agent_text):
+        if is_affirmation(raw) and phone_digit_count(raw) < 3:
+            mentioned = extract_other_party_from_agent_readback(previous_agent_text)
+            if mentioned:
+                return mentioned
+        if phone_digit_count(raw) < 3:
+            cleaned = re.sub(
+                r"^(?:(?:yes|yeah|yep|sure|ok|okay)[\s,.]+)?(?:it(?:'?s|\s+was|\s+is)\s+)?"
+                r"(?:a |an |the )?",
+                "",
+                raw,
+                flags=re.IGNORECASE,
+            ).strip(" .,")
+            if (
+                len(cleaned) >= 3
+                and cleaned.lower() not in _STOPWORDS
+                and cleaned.lower().strip(" .,!")
+                not in {
+                    "yes",
+                    "yeah",
+                    "yep",
+                    "yup",
+                    "no",
+                    "nope",
+                    "nah",
+                    "ok",
+                    "okay",
+                    "sure",
+                    "right",
+                    "correct",
+                }
+            ):
+                return cleaned
+
     for pattern in _OTHER_PARTY_PATTERNS:
         match = pattern.search(raw)
         if not match:
@@ -279,6 +330,21 @@ def extract_other_party(text: str) -> str | None:
             continue
         return name
     return None
+
+
+def extract_other_party_from_agent_readback(text: str) -> str | None:
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    match = _AGENT_PLACE_READBACK.search(raw)
+    if not match:
+        return None
+    name = re.sub(r"\s+", " ", match.group(1)).strip(" .,")
+    if len(name) < 3:
+        return None
+    if name.lower() in _STOPWORDS:
+        return None
+    return name
 
 
 def utterance_text(new_message: object) -> str:
@@ -371,7 +437,9 @@ def auto_capture_from_utterance(
         logger.info("auto-confirmed phone via affirmation")
 
     if state.other_party_required and not state.other_party_name:
-        other = extract_other_party(raw)
+        other = extract_other_party(raw, previous_agent_text)
+        if other is None and affirmed and previous_agent_text:
+            other = extract_other_party_from_agent_readback(previous_agent_text)
         if other:
             if state.full_name and other.lower() == state.full_name.lower():
                 pass

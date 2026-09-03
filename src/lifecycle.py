@@ -26,9 +26,15 @@ logger = logging.getLogger("bushbush.lifecycle")
 
 
 class CallLifecycle:
-    def __init__(self, session: AgentSession, state: CallState) -> None:
+    def __init__(
+        self,
+        session: AgentSession,
+        state: CallState,
+        turn_detector: object | None = None,
+    ) -> None:
         self._session = session
         self._state = state
+        self._turn_detector = turn_detector
         self._last_user_activity = time.monotonic()
         self._reminders_sent = 0
         self._tasks: list[asyncio.Task] = []
@@ -73,10 +79,16 @@ class CallLifecycle:
             self._touch()
             if getattr(ev, "is_final", False):
                 self._user_final_at = time.monotonic()
+                observe = getattr(self._turn_detector, "observe_transcript", None)
+                if observe:
+                    observe(ev.transcript)
 
     def _on_user_state(self, ev) -> None:  # UserStateChangedEvent
         if getattr(ev, "new_state", None) == "speaking":
             self._touch()
+            clear = getattr(self._turn_detector, "clear_transcript", None)
+            if clear:
+                clear()
 
     def _on_item_added(self, ev) -> None:  # ConversationItemAddedEvent
         item = getattr(ev, "item", None)

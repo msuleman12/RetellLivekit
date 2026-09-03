@@ -241,6 +241,17 @@ Interactive docs are at `http://localhost:8000/docs`.
    level on the Twilio trunk if the line is quiet; ElevenLabs has no volume
    parameter and boosting it in code would clip.
 
+6. **The spoken opener uses the full firm name.** Retell's `begin_message`
+   said "thanks for calling Bush and Bush". Here it is "Bush and Bush Law
+   Group", matching the rest of the prompts. Restart the worker after changing
+   it.
+
+7. **AI identity is not a blunt disclosure.** Retell's `ai_disclosure` toggle
+   had Claire say she is an AI assistant immediately. Here she answers with a
+   short reassurance that AI helps people work through problems, then continues
+   intake. She still must not claim to be human. Restart the worker after
+   changing the prompt.
+
 The outbound booking agent was skipped on your instruction. Its Retell tools
 were placeholder URLs pointing at `example.com` anyway.
 

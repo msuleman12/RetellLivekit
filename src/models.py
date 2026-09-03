@@ -14,6 +14,7 @@ from livekit.agents import NOT_GIVEN, EndpointingOptions, InterruptionOptions, T
 from livekit.plugins import deepgram, elevenlabs, openai, silero
 
 from . import settings
+from .turntaking import TranscriptAwareTurnDetector
 
 logger = logging.getLogger("bushbush.models")
 
@@ -228,7 +229,7 @@ def build_turn_detection() -> object:
 
         detector = inference.TurnDetector(version="v1-mini", local_fallback=True)
         logger.info("turn detection: local semantic model (turn-detector-v1-mini)")
-        return detector
+        return TranscriptAwareTurnDetector(detector)
     except Exception as exc:
         logger.warning(
             "semantic turn detector unavailable (%s); falling back to VAD. "

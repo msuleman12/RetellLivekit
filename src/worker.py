@@ -93,20 +93,23 @@ async def entrypoint(ctx: JobContext) -> None:
         settings.call.latency_profile,
     )
 
+    turn_handling = models.build_turn_handling()
     session: AgentSession[CallState] = AgentSession[CallState](
         userdata=state,
         stt=models.build_stt(),
         llm=models.build_llm(),
         tts=models.build_tts(),
         vad=ctx.proc.userdata.get("vad") or models.build_vad(),
-        turn_handling=models.build_turn_handling(),
+        turn_handling=turn_handling,
         # Retell max_tool_steps equivalent: enough for record_* + a reply.
         max_tool_steps=5,
         # Fast: shorten echo-warmup so interruptions aren't blocked for 3s.
         aec_warmup_duration=0.5 if settings.call.is_fast else NOT_GIVEN,
     )
 
-    lifecycle = CallLifecycle(session, state)
+    lifecycle = CallLifecycle(
+        session, state, turn_detector=turn_handling.get("turn_detection")
+    )
 
     async def _on_shutdown() -> None:
         await lifecycle.aclose()

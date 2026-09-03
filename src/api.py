@@ -122,12 +122,10 @@ async def config() -> dict[str, Any]:
             "responsiveness": settings.call.responsiveness,
             "endpointing_min_delay_s": min_delay,
             "endpointing_max_delay_s": max_delay,
-            "turn_detector": (
-                False
-                if settings.call.is_fast
-                else settings.call.use_turn_detector
+            "turn_detector": settings.call.semantic_turns,
+            "turn_detection_mode": (
+                "semantic" if settings.call.semantic_turns else "vad"
             ),
-            "turn_detection_mode": "vad" if settings.call.is_fast else "cloud_or_vad",
             "noise_cancellation": settings.call.noise_cancellation,
         },
         "call": {

@@ -254,7 +254,7 @@ class BaseIntakeAgent(Agent):
         # on it. Its results are picked up by the next turn's instruction block.
         self._schedule_extraction(state, turn_ctx, text)
 
-        await self._refresh_instructions(state, notes)
+        await self._refresh_instructions(state, notes, turn_ctx=turn_ctx)
         # Deliberately no hangup here. Only `end_call` ends a call.
 
     # ------------------------------------------------------------------
@@ -296,12 +296,36 @@ class BaseIntakeAgent(Agent):
 
         self._extract_task = asyncio.create_task(_run())
 
-    async def _refresh_instructions(self, state: CallState, notes: list[str]) -> None:
+    async def _refresh_instructions(
+        self,
+        state: CallState,
+        notes: list[str],
+        turn_ctx: llm.ChatContext | None = None,
+    ) -> None:
         """Re-hang the ALREADY COLLECTED / STILL UNKNOWN block off the base prompt.
 
-        Deliberately `update_instructions` and not a `turn_ctx` message: mutating
-        turn_ctx invalidates LiveKit's preemptive generation, which is where a
-        good chunk of this agent's responsiveness comes from.
+        `update_instructions` alone is not enough on the turn where something was
+        just captured, and that is exactly the turn that matters.
+
+        LiveKit starts generating the reply *before* `on_user_turn_completed`
+        runs (preemptive generation), then keeps that reply if nothing important
+        changed. Its equivalence check compares the transcript, the chat context,
+        the tools and the tool choice - it does NOT compare instructions
+        (`agent_activity.py`, "make sure the on_user_turn_completed didn't change
+        some request parameters"). So an instruction update was invisible to it:
+        the caller said their phone number, capture stored it, the block was
+        rewritten to say so, and the agent still spoke the reply it had drafted
+        while the block still read `- phone: (not yet)` - and asked for the
+        number again.
+
+        Adding the block to `turn_ctx` fixes both halves at once. The model sees
+        the new facts on this turn, and the context is no longer equivalent, so
+        the stale draft is discarded and regenerated. `turn_ctx` is LiveKit's
+        per-turn copy - it is not kept on `Agent.chat_ctx`, so this does not pile
+        up in history; `update_instructions` is what carries the block forward.
+
+        The cost is the preemptive head start, and only on turns where a fact
+        actually landed. Turns that capture nothing keep it.
         """
         unknown = self._extractor.still_unknown(state)
         state.note_topics_offered(unknown)
@@ -316,6 +340,8 @@ class BaseIntakeAgent(Agent):
             return
         self._last_collected_block = summary
         await self.update_instructions(f"{self._base_instructions}\n\n{summary}")
+        if turn_ctx is not None:
+            turn_ctx.add_message(role="system", content=summary)
 
     # -- pronunciation dictionary fallback ---------------------------------
     async def tts_node(
