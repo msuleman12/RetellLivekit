@@ -31,7 +31,7 @@ from typing import Any
 from . import prompts, settings
 from .models import build_async_openai
 from .schemas import FIELDS_BY_CASE_TYPE, AnalysisField
-from .state import CallState, normalize_phone
+from .state import MAX_TOPIC_OFFERS, CallState, normalize_phone
 
 logger = logging.getLogger("bushbush.extract")
 
@@ -321,6 +321,13 @@ class LiveExtractor:
         out: list[str] = []
         for name in fields:
             if name in state.optional_fields or name in state.asked_topics:
+                continue
+            # Offered on MAX_TOPIC_OFFERS turns already and still not filled.
+            # Either Claire asked and the answer did not record, or it does not
+            # fit this call. Suggesting it a fourth time is how the same
+            # question came round again - stand it down and give the slot to
+            # the fields behind it.
+            if state.topic_offers.get(name, 0) >= MAX_TOPIC_OFFERS:
                 continue
             out.append(name)
             if len(out) >= limit:

@@ -303,7 +303,9 @@ class BaseIntakeAgent(Agent):
         turn_ctx invalidates LiveKit's preemptive generation, which is where a
         good chunk of this agent's responsiveness comes from.
         """
-        summary = state.collected_summary(self._extractor.still_unknown(state))
+        unknown = self._extractor.still_unknown(state)
+        state.note_topics_offered(unknown)
+        summary = state.collected_summary(unknown)
         if notes:
             summary += (
                 "\nJUST CAPTURED: "

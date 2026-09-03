@@ -18,6 +18,23 @@ from typing import Any
 #: a worse experience than the firm gets value from a fourth attempt.
 MAX_PHONE_ATTEMPTS = 3
 
+#: How many turns a single STILL UNKNOWN field may stay on the menu before it
+#: steps aside for the ones behind it.
+#:
+#: `still_unknown` returns the first N unfilled fields in schema order, and a
+#: field leaves only when it is recorded or the extractor marks it asked. The
+#: top of every practice area's list is held by fields whose schema says "only
+#: populate if the caller mentioned it" - email, preferred contact, best time
+#: to reach. Callers rarely volunteer those, so nothing filled them, nothing
+#: marked them asked, and the same names were handed to the model turn after
+#: turn. Claire asked, got a vague answer or none, saw the name again next
+#: turn, and asked again.
+#:
+#: Three turns is enough for one of them to come up naturally. After that the
+#: field stands down and the ones behind it - the case-specific questions -
+#: finally get a turn.
+MAX_TOPIC_OFFERS = 3
+
 _WORD_DIGITS: dict[str, str] = {
     "zero": "0",
     "oh": "0",
@@ -190,6 +207,14 @@ class CallState:
     optional_fields: dict[str, Any] = field(default_factory=dict)
     #: Topics Claire has already raised, so she varies instead of repeating.
     asked_topics: set[str] = field(default_factory=set)
+    #: How many turns each STILL UNKNOWN field has been offered on. See
+    #: MAX_TOPIC_OFFERS - this is what stops one field being suggested for the
+    #: whole call.
+    topic_offers: dict[str, int] = field(default_factory=dict)
+    #: The turn each field was last counted on, so a field is counted once per
+    #: turn no matter how many times the instructions are refreshed. The
+    #: background extractor refreshes them a second time when it lands.
+    topic_offer_turn: dict[str, int] = field(default_factory=dict)
 
     # --- closing sequence -----------------------------------------------------
     callback_promised: bool = False
@@ -269,6 +294,19 @@ class CallState:
             return False
         self.optional_fields[name] = value
         return True
+
+    def note_topics_offered(self, names: tuple[str, ...]) -> None:
+        """Count one turn's worth of STILL UNKNOWN suggestions.
+
+        Idempotent within a turn: `_refresh_instructions` runs once when the
+        caller's turn completes and again when background extraction lands, and
+        a field must not burn two of its three turns for one utterance.
+        """
+        for name in names:
+            if self.topic_offer_turn.get(name) == self.user_turns:
+                continue
+            self.topic_offer_turn[name] = self.user_turns
+            self.topic_offers[name] = self.topic_offers.get(name, 0) + 1
 
     def may_end_call(self) -> list[str]:
         """What still blocks `end_call`. Empty list = the agent may hang up.
