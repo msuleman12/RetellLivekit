@@ -3,6 +3,6 @@
   "sipTrunkId": "ST_e4YDr4WSECY2",
   "trunk": {
     "name": "My Inbound Spanish",
-    "numbers": ["+15183333620", "+13254425883"]
+    "numbers": ["+13254425883"]
   }
 }
