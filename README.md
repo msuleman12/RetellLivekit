@@ -252,6 +252,11 @@ Interactive docs are at `http://localhost:8000/docs`.
    intake. She still must not claim to be human. Restart the worker after
    changing the prompt.
 
+8. **Employment can upgrade to harassment mid-call.** Retell classified once in
+   the router. If the caller later makes sexual harassment explicit ("harassing
+   me sexually at work"), this worker swaps to the harassment specialist with
+   `greet=False` — same handoff as the router, no transfer tool.
+
 The outbound booking agent was skipped on your instruction. Its Retell tools
 were placeholder URLs pointing at `example.com` anyway.
 

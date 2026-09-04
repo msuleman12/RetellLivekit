@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import AsyncIterable
 
 from livekit import api, rtc
@@ -39,7 +40,14 @@ from livekit.agents import (
 )
 
 from .. import prompts, settings
-from ..capture import auto_capture_from_utterance, default_farewell, utterance_text
+from ..capture import (
+    auto_capture_from_utterance,
+    backfill_incident_from_context,
+    backfill_name_from_context,
+    default_farewell,
+    user_texts_from_chat,
+    utterance_text,
+)
 from ..extract import LiveExtractor
 from ..models import uses_elevenlabs_dictionary
 from ..pronunciation import apply_pronunciation
@@ -246,9 +254,19 @@ class BaseIntakeAgent(Agent):
 
         # Inline fast-path: phone digits and read-back confirmation are
         # deterministic and worth having before the model comes back.
-        notes = auto_capture_from_utterance(
-            state, text, previous_agent_text=last_assistant_text(turn_ctx)
+        # Backfill first so a sign-off on this turn sees the story that
+        # arrived earlier and can unlock `caller_done`.
+        texts = user_texts_from_chat(turn_ctx, text)
+        notes = backfill_name_from_context(state, texts)
+        notes.extend(backfill_incident_from_context(state, texts))
+        notes.extend(
+            auto_capture_from_utterance(
+                state, text, previous_agent_text=last_assistant_text(turn_ctx)
+            )
         )
+
+        if self._maybe_upgrade_to_harassment(state, text, turn_ctx, new_message):
+            raise StopResponse()
 
         # Model-driven capture runs in the background so the caller never waits
         # on it. Its results are picked up by the next turn's instruction block.
@@ -342,6 +360,61 @@ class BaseIntakeAgent(Agent):
         await self.update_instructions(f"{self._base_instructions}\n\n{summary}")
         if turn_ctx is not None:
             turn_ctx.add_message(role="system", content=summary)
+
+    def _maybe_upgrade_to_harassment(
+        self,
+        state: CallState,
+        text: str,
+        turn_ctx: llm.ChatContext,
+        new_message: llm.ChatMessage,
+    ) -> bool:
+        """Move employment → harassment if the caller later names sexual harassment.
+
+        The keyword pass can miss "My manager has harassing me" (no "sexual",
+        no "at work"), so the LLM hands off to employment. A later "Harassing
+        me sexually at work" must not stay on the employment prompt, or Claire
+        keeps the workplace-injury checklist and never treats it as sensitive
+        intake. Same handoff as the router: `update_agent(..., greet=False)`,
+        no transfer tool.
+        """
+        if self.case_type != "employment":
+            return False
+
+        from ..routing import classify_case_type
+
+        blob = " ".join(user_texts_from_chat(turn_ctx, text))
+        if (
+            classify_case_type(text) != "harassment"
+            and classify_case_type(blob) != "harassment"
+        ):
+            return False
+
+        from .harassment import HarassmentAgent
+
+        ctx = self.chat_ctx.copy()
+        if ctx.index_by_id(new_message.id) is None:
+            ctx.items.append(new_message)
+        unknown = self._extractor.still_unknown(state)
+        ctx.add_message(role="system", content=state.collected_summary(unknown))
+        try:
+            history = self.session.history
+            if history.index_by_id(new_message.id) is None:
+                self.session._conversation_item_added(new_message)
+        except Exception:
+            logger.debug("could not commit upgrade turn to history", exc_info=True)
+
+        state.case_type = "harassment"
+        state.other_party_required = False
+        state.handoffs.append(
+            {
+                "from": "employment",
+                "to": "harassment",
+                "at": int(time.time() * 1000),
+            }
+        )
+        logger.info("upgrading employment -> harassment (no transfer tool)")
+        self.session.update_agent(HarassmentAgent(chat_ctx=ctx, greet=False))
+        return True
 
     # -- pronunciation dictionary fallback ---------------------------------
     async def tts_node(

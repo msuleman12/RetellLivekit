@@ -334,10 +334,25 @@ class CallState:
         just the agent's memory of the call.
         """
         lines = ["ALREADY COLLECTED - do not ask for these again:"]
-        lines.append(f"- name: {self.full_name or '(not yet)'}")
+        if self.first_name and self.last_name:
+            lines.append(f"- name: {self.full_name}")
+        elif self.first_name:
+            lines.append(
+                f"- name: {self.first_name} (last name not yet — ask only for "
+                "the last name, do not re-ask phone)"
+            )
+        else:
+            lines.append("- name: (not yet)")
         if self.phone:
-            rb = "confirmed" if self.phone_read_back else "not read back yet"
-            lines.append(f"- phone: {self.phone} ({rb})")
+            if self.phone_read_back:
+                lines.append(
+                    f"- phone: {self.phone} (confirmed — do not read the digits again)"
+                )
+            else:
+                lines.append(
+                    f"- phone: {self.phone} (not read back yet — this turn: "
+                    "read it back in groups, ask if that is right, then STOP and wait)"
+                )
         else:
             lines.append("- phone: (not yet)")
         if self.other_party_required or self.other_party_name:

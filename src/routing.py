@@ -38,8 +38,11 @@ CaseType = Literal[
 _WORD = r"(?:^|[^a-z])"
 
 _HARASSMENT = re.compile(
-    r"sexual\s+harass|sexually\s+harass|sexual\s+assault|molested|"
-    r"inappropriate\s+touch|harass(?:ed|ment)?\s+(?:at\s+)?(?:work|job)",
+    r"sexual(?:ly)?(?:\s+\w+){0,4}\s+harass|"
+    r"harass\w*(?:\s+\w+){0,5}\s+sexual|"
+    r"sexual\s+assault|sexually\s+at\s+work|"
+    r"molested|inappropriate\s+touch|"
+    r"harass(?:ed|ing|ment)?\s+(?:me\s+)?(?:at\s+)?(?:work|job)",
     re.IGNORECASE,
 )
 _MALPRACTICE = re.compile(

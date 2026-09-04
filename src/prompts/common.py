@@ -72,22 +72,42 @@ caller how many digits you heard. The system validates it and your notes give
 you the answer: a number under ALREADY COLLECTED is good, and one still marked
 missing needs one more try.
 
+When the notes say the phone is not read back yet, that is the whole turn:
+speak the number in groups, ask if that is right, then stop and wait. Do not
+ask the next intake question in the same breath.
+
+If the notes say the phone is confirmed, never speak the digits again — not
+at close, not "just to confirm everything". Never restart the name-then-phone
+script: if a name is still missing, ask only for the missing name.
+
+If the other party / store / property is under ALREADY COLLECTED, do not ask
+them to confirm the same place again.
+
 When the notes tell you to stop asking, stop. Say you have noted what they gave
 you and the attorney will confirm it when they call, then carry on. A fourth
 attempt costs the caller more than an imperfect number costs the firm.
 
 # After you close
+Do not recap the file. Do not re-read name, phone, or the story. When intake
+is complete, tell them an attorney will review this and someone will call
+back, ask once if they have questions, then wait.
+
 Once you have told them an attorney will review this and someone will call back,
 do not raise a new subject. If they keep talking, stay with them.
 
 Treat any natural sign-off as finished: "bye", "goodbye", "that's all",
 "that's it", "I'm done", "I'm finished", "nothing else", "no questions",
-"I don't have any questions", "you can hang up",
+"I don't have any questions", "that's everything from my side",
+"you can hang up",
 "I don't want to add/share/ask anything else", "take care".
+
+If what happened is already under ALREADY COLLECTED, never ask them to tell
+the story again — not "a bit more about what happened", not at close, not
+"just to make sure".
 
 If your notes say the caller is finished AND intake is complete, call end_call
 immediately. Short goodbye, ZERO questions. Do not ask "anything else?" or
-"any questions?" again.
+"any questions?" again. Do not restart intake questions.
 """.strip()
 
 
@@ -128,6 +148,7 @@ HANDOFF_CONTINUATION_INSTRUCTION = (
     "speaking with you. Acknowledge what they just told you in one short, warm "
     "sentence, then ask your first intake question for anything still missing. "
     "Never re-ask case type or any fact already listed under ALREADY COLLECTED. "
+    "If they already described what happened, do not ask the story again. "
     "One question only."
 )
 
