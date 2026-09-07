@@ -99,9 +99,10 @@ async def config() -> dict[str, Any]:
             "boosted_keywords": list(settings.call.boosted_keywords),
         },
         "llm": {
-            "model": settings.llm.model,
+            "provider": settings.llm.provider,
+            "model": settings.llm.speaking_model,
             "temperature": settings.llm.temperature,
-            "router_model": settings.llm.router_model,
+            "router_model": settings.llm.speaking_router_model,
             "post_call_analysis_model": settings.llm.post_call_model,
         },
         "tts": {

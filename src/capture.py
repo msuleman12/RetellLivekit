@@ -200,10 +200,36 @@ _STORY_QUESTION = re.compile(
     re.IGNORECASE,
 )
 
+# Claire asking only for the surname after first name is already known.
+_LAST_NAME_QUESTION = re.compile(
+    r"\b(?:last\s+name|surname|family\s+name)\b",
+    re.IGNORECASE,
+)
+
+# "B", "It's B.", "letter B", "the letter B" — 1–2 character surnames are real
+# (O, Ng, Li) and must not go through _NAME_WORD, which requires 2+ letters
+# after the first character.
+_LAST_NAME_ONLY = re.compile(
+    r"^(?:(?:yes|yeah|yep|sure|ok|okay|so|well|and|it'?s|this\s+is|"
+    r"(?:the\s+)?letter)[\s,.]+)*"
+    r"([A-Za-z][A-Za-z'\-]{0,30})"
+    r"[\s.!,]*$",
+    re.IGNORECASE,
+)
+
 _CALLBACK_PROMISED = re.compile(
     r"attorney will review|someone (?:will|from our office will) "
     r"(?:call|get back|be in touch)",
     re.IGNORECASE,
+)
+
+# Claire just read digits back and asked if they were right — even when the
+# string was not a valid 10-digit US number.
+_AGENT_PHONE_READBACK = re.compile(
+    r"(?:your\s+(?:phone\s+)?number|the\s+number|callback\s+number|"
+    r"number\s+is|i have(?:\s+it)?(?:\s+as)?).{0,160}?"
+    r"(?:is that (?:correct|right)|did i get|did that sound)",
+    re.IGNORECASE | re.DOTALL,
 )
 
 # Words that must never be read as somebody's first or last name. The bare
@@ -271,6 +297,24 @@ def extract_name(text: str) -> tuple[str, str] | None:
         ):
             return first, ""
     return None
+
+
+def extract_last_name_answer(text: str) -> str | None:
+    """Last name only, after Claire asked for it. Allows a single letter."""
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    if sum(ch.isdigit() for ch in raw) >= 3:
+        return None
+    match = _LAST_NAME_ONLY.search(raw)
+    if not match:
+        return None
+    last = match.group(1).strip()
+    if not last or not last[0].isalpha():
+        return None
+    if last.lower() in _STOPWORDS:
+        return None
+    return last
 
 
 def extract_name_from_agent_readback(text: str) -> tuple[str, str] | None:
@@ -518,6 +562,27 @@ def extract_other_party_from_agent_readback(text: str) -> str | None:
     return name
 
 
+def is_status_note(note: str) -> bool:
+    """True for capture notes that are NOT confirmed facts.
+
+    `JUST CAPTURED … These are confirmed` used to fire on phone attempts, so
+    Claire treated a 9-digit fragment as collected and then asked for the
+    number again because ALREADY COLLECTED still said `(not yet)`.
+    """
+    return (note or "").startswith(
+        ("phone_attempt=", "phone_unverified=", "phone_incomplete_yes=")
+    )
+
+
+def _agent_read_back_phone(previous_agent_text: str) -> bool:
+    raw = (previous_agent_text or "").strip()
+    if not raw:
+        return False
+    if phone_digit_count(raw) < 7:
+        return False
+    return bool(_AGENT_PHONE_READBACK.search(raw))
+
+
 def utterance_text(new_message: object) -> str:
     """Plain text of a ChatMessage, whichever shape the plugin produced."""
     text = (getattr(new_message, "text_content", None) or "").strip()
@@ -556,6 +621,17 @@ def auto_capture_from_utterance(
             else:
                 notes.append(f"name={state.first_name} (last name not yet)")
             logger.info("auto-captured name")
+        elif (
+            state.first_name
+            and not state.last_name
+            and previous_agent_text
+            and _LAST_NAME_QUESTION.search(previous_agent_text)
+        ):
+            last = extract_last_name_answer(raw)
+            if last:
+                state.record_name(None, last)
+                notes.append(f"name={state.full_name}")
+                logger.info("auto-captured last name")
 
     heard_digits = extract_phone_digits(raw)
 
@@ -591,7 +667,10 @@ def auto_capture_from_utterance(
         # said so the firm is not left with an empty field.
         state.phone_attempts += 1
         state.phone_heard_raw = heard_digits
-        notes.append(f"phone_attempt={state.phone_attempts} (heard {heard_digits})")
+        notes.append(
+            f"phone_attempt={state.phone_attempts} (heard {len(heard_digits)} "
+            f"digits, not a valid US number — do not read them back as complete)"
+        )
         logger.info("phone attempt %d unusable (%d digits)", state.phone_attempts, len(heard_digits))
         if state.phone_attempts >= MAX_PHONE_ATTEMPTS and not state.phone:
             state.phone_unverified = True
@@ -609,6 +688,27 @@ def auto_capture_from_utterance(
         state.phone_read_back = True
         notes.append("phone_read_back=confirmed (yes)")
         logger.info("auto-confirmed phone via affirmation")
+    elif (
+        affirmed
+        and not state.phone
+        and phone_digit_count(raw) < 7
+        and _agent_read_back_phone(previous_agent_text)
+    ):
+        # "Is that correct?" / "Yep" after Claire invented a read-back of
+        # incomplete digits. That yes must not look like a collected number.
+        if state.phone_attempts >= MAX_PHONE_ATTEMPTS:
+            state.phone_unverified = True
+            notes.append(
+                "phone_incomplete_yes=True (yes was not a confirmation; "
+                "stop asking for the phone)"
+            )
+        else:
+            notes.append(
+                "phone_incomplete_yes=True (yes was not a confirmation — "
+                "no valid 10-digit number is on file. Do not thank them as "
+                "if you have it. Ask once more, slowly, for all 10 digits.)"
+            )
+        logger.info("ignored yes to incomplete phone read-back")
 
     existing_is_caller = bool(
         state.other_party_name

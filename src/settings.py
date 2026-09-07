@@ -136,9 +136,10 @@ def resolve_endpointing(
         # A model is deciding whether the caller is finished, so the delay no
         # longer has to be long enough to ride out every pause on its own. It
         # only has to cover the model's own inference, which is tens of ms
-        # locally. The wide ceiling is what the detector uses when it thinks
-        # the sentence is unfinished - it is a budget, not a wait.
-        return max(min_delay, 0.35), 4.0
+        # locally. The ceiling is what the detector uses when it thinks the
+        # sentence is unfinished - it is a budget, not a wait. 4s was audible
+        # freeze on short answers the audio model scored as unfinished.
+        return max(min_delay, 0.35), 2.0
 
     # VAD only: no idea whether the sentence is finished, so the floor has to
     # be long enough to ride out a mid-sentence pause by brute force.
@@ -185,6 +186,19 @@ class LLMSettings:
     """Retell: practice agents gpt-4.1-mini @0.55, router flow gpt-4.1-nano."""
 
     api_key: str = field(default_factory=lambda: _str("OPENAI_API_KEY"))
+    #: openai (default) or groq. Groq is OpenAI-compatible and only used for
+    #: the speaking models (`build_llm` / `build_router_llm`). Post-call
+    #: analysis and live extract stay on OpenAI.
+    provider: str = field(
+        default_factory=lambda: _str("LLM_PROVIDER", "openai").lower()
+    )
+    groq_api_key: str = field(default_factory=lambda: _str("GROQ_API_KEY"))
+    groq_model: str = field(
+        default_factory=lambda: _str("GROQ_LLM_MODEL", "openai/gpt-oss-120b")
+    )
+    groq_router_model: str = field(
+        default_factory=lambda: _str("GROQ_ROUTER_LLM_MODEL", "openai/gpt-oss-20b")
+    )
     model: str = field(default_factory=lambda: _str("LLM_MODEL", "gpt-4.1-mini"))
     temperature: float = field(default_factory=lambda: _float("LLM_TEMPERATURE", 0.55))
     router_model: str = field(default_factory=lambda: _str("ROUTER_LLM_MODEL", "gpt-4.1-nano"))
@@ -238,6 +252,18 @@ class LLMSettings:
     classify_inline_budget_ms: int = field(
         default_factory=lambda: _int("ROUTER_CLASSIFY_INLINE_BUDGET_MS", 700)
     )
+
+    @property
+    def uses_groq(self) -> bool:
+        return self.provider == "groq"
+
+    @property
+    def speaking_model(self) -> str:
+        return self.groq_model if self.uses_groq else self.model
+
+    @property
+    def speaking_router_model(self) -> str:
+        return self.groq_router_model if self.uses_groq else self.router_model
 
 
 @dataclass(frozen=True)
@@ -308,7 +334,7 @@ class CallSettings:
     #: How long to wait for the rest of a sentence before answering the part we
     #: have. Only applies to utterances that read as cut off mid-thought.
     unfinished_grace_ms: int = field(
-        default_factory=lambda: _int("UNFINISHED_GRACE_MS", 2_000)
+        default_factory=lambda: _int("UNFINISHED_GRACE_MS", 800)
     )
 
     # Retell `boosted_keywords` -> Deepgram nova-3 keyterms.
@@ -405,6 +431,10 @@ def validate() -> list[str]:
         problems.append("DEEPGRAM_API_KEY is not set")
     if not llm.api_key:
         problems.append("OPENAI_API_KEY is not set")
+    if llm.uses_groq and not llm.groq_api_key:
+        problems.append("GROQ_API_KEY is not set (LLM_PROVIDER=groq)")
+    if llm.provider not in ("openai", "groq"):
+        problems.append(f"LLM_PROVIDER={llm.provider!r} is not openai or groq")
     if not tts.api_key:
         problems.append("ELEVENLABS_API_KEY is not set")
     if not tts.voice_id:

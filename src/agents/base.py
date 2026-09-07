@@ -45,6 +45,7 @@ from ..capture import (
     backfill_incident_from_context,
     backfill_name_from_context,
     default_farewell,
+    is_status_note,
     user_texts_from_chat,
     utterance_text,
 )
@@ -349,11 +350,16 @@ class BaseIntakeAgent(Agent):
         state.note_topics_offered(unknown)
         summary = state.collected_summary(unknown)
         if notes:
-            summary += (
-                "\nJUST CAPTURED: "
-                + ", ".join(notes)
-                + ". These are confirmed — never ask for them again."
-            )
+            confirmed = [n for n in notes if not is_status_note(n)]
+            status = [n for n in notes if is_status_note(n)]
+            if confirmed:
+                summary += (
+                    "\nJUST CAPTURED: "
+                    + ", ".join(confirmed)
+                    + ". These are confirmed — never ask for them again."
+                )
+            if status:
+                summary += "\nPHONE STATUS: " + "; ".join(status)
         if summary == self._last_collected_block:
             return
         self._last_collected_block = summary

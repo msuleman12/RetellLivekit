@@ -67,12 +67,24 @@ _NUMBER_WORDS = frozenset(
 _TERMINAL = ".!?"
 _WORD_RE = re.compile(r"[A-Za-z']+")
 
+#: Fillers in front of a one-token last name / spelled letter ("it's B").
+_NAME_FILLERS = frozenset({"it's", "its", "letter"})
+
+
+def _is_name_token(word: str) -> bool:
+    """A spelled letter or short surname, not a dangling lead-in."""
+    if not word or word in _DANGLING or word in _COMPLETE_SHORT or word in _NAME_FILLERS:
+        return False
+    if len(word) == 1:
+        return word.isalpha()
+    return 2 <= len(word) <= 20 and word.isalpha()
+
 
 def looks_complete_answer(text: str) -> bool:
     """True for a standalone confirmation that should not wait out max endpointing.
 
     The audio turn detector scored "Yep." at 6.7% end-of-turn and then sat on
-    the 4s ceiling. These phrases are finished answers, period or not.
+    the max-delay ceiling. These phrases are finished answers, period or not.
     """
     words = _WORD_RE.findall((text or "").strip().lower())
     if not words:
@@ -83,6 +95,18 @@ def looks_complete_answer(text: str) -> bool:
         return True
     # "yes it is" / "yeah it is" / "no it isn't"
     if words[0] in _COMPLETE_SHORT and words[-1] in ("is", "isn't", "are", "aren't"):
+        return True
+    # "B" / "Smith" / "it's B" / "letter B" / "the letter B"
+    if len(words) == 1 and _is_name_token(words[0]):
+        return True
+    if len(words) == 2 and words[0] in _NAME_FILLERS and _is_name_token(words[1]):
+        return True
+    if (
+        len(words) == 3
+        and words[0] in {"it's", "its", "the"}
+        and words[1] == "letter"
+        and _is_name_token(words[2])
+    ):
         return True
     return False
 
@@ -169,7 +193,16 @@ class FragmentBuffer:
         if self._holds >= self._max_holds:
             logger.debug("fragment held %d times already; answering it", self._holds)
             return False
-        return looks_unfinished(merged)
+        if looks_complete_answer(merged) or not looks_unfinished(merged):
+            return False
+        # Semantic EOT already sat on max_delay (threshold 1.0) for unfinished
+        # transcripts. Holding again stacks silence and cancels preemptive TTS.
+        # VAD-only still needs this buffer — there is no 1.0 override.
+        from . import settings
+
+        if settings.call.semantic_turns:
+            return False
+        return True
 
     def hold(self, session, merged: str) -> None:
         """Keep `merged` back and wait `grace_s` for the caller to continue."""
@@ -247,7 +280,7 @@ class TranscriptAwareTurnDetector:
     """Streaming turn detector that reads the latest transcript.
 
     The audio model does not see the words, so "Yep." was scored as unfinished
-    and paid the 4s endpointing ceiling. We only override the threshold; the
+    and paid the semantic endpointing ceiling. We only override the threshold; the
     model still decides every other turn.
     """
 

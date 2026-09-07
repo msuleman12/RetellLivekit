@@ -1,8 +1,10 @@
 {
-  "_comment": "Record of the deployed inbound trunk. Credentials are deliberately omitted - see README.md. Numbers change via update_inbound_trunk_fields, so re-dump this file rather than editing it by hand.",
-  "sipTrunkId": "ST_e4YDr4WSECY2",
+  "_comment": "Record of the Clare test inbound trunk. Credentials are deliberately omitted - see README.md. Numbers change via update_inbound_trunk_fields, so re-dump this file rather than editing it by hand.",
+  "sipTrunkId": "ST_hhBgddNfqAoz",
+  "sipDispatchRuleId": "SDR_XnpUqwKWzoWm",
   "trunk": {
-    "name": "My Inbound Spanish",
+    "name": "Clare",
     "numbers": ["+13254425883"]
-  }
+  },
+  "agentName": "bush-bush-intake"
 }

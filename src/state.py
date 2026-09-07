@@ -353,6 +353,21 @@ class CallState:
                     f"- phone: {self.phone} (not read back yet — this turn: "
                     "read it back in groups, ask if that is right, then STOP and wait)"
                 )
+        elif self.phone_unverified or self.phone_attempts >= MAX_PHONE_ATTEMPTS:
+            lines.append(
+                f"- phone: stopped asking after {self.phone_attempts} incomplete "
+                f"attempts (heard: {self.phone_heard_raw or 'nothing usable'}). "
+                "Do NOT ask for the number again. Do NOT read digits back. "
+                "Say you noted what they gave and the attorney will confirm it."
+            )
+        elif self.phone_attempts > 0:
+            n = len(self.phone_heard_raw or "")
+            lines.append(
+                f"- phone: (not yet — last try had {n} digits, not a valid "
+                "10-digit US number. Do NOT read those digits back as if they "
+                "were complete. Do NOT treat a yes to that read-back as "
+                "confirmation. Ask once more, slowly, for all 10 digits.)"
+            )
         else:
             lines.append("- phone: (not yet)")
         if self.other_party_required or self.other_party_name:
@@ -387,13 +402,6 @@ class CallState:
                     "- the caller said they are finished — call end_call NOW "
                     "with a short goodbye and ZERO questions. Do not ask anything else."
                 )
-
-        if self.phone_attempts >= MAX_PHONE_ATTEMPTS and not self.phone:
-            lines.append(
-                f"- phone: {self.phone_attempts} attempts, still not a valid "
-                f"number (heard: {self.phone_heard_raw or 'nothing usable'}). "
-                "Stop asking and move on."
-            )
 
         return "\n".join(lines)
 

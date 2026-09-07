@@ -257,6 +257,13 @@ Interactive docs are at `http://localhost:8000/docs`.
    me sexually at work"), this worker swaps to the harassment specialist with
    `greet=False` — same handoff as the router, no transfer tool.
 
+9. **`LATENCY_PROFILE=fast` (the default) is deliberately snappier than Retell.**
+   Semantic endpointing uses a 0.35s / 2.0s window instead of waiting out a 4s
+   ceiling on short answers, and `UNFINISHED_GRACE_MS` defaults to 800. Prompts
+   and must-haves are unchanged. Set `LATENCY_PROFILE=parity` for Retell timing.
+   Speaking LLMs can use Groq via `LLM_PROVIDER=groq`; post-call analysis stays
+   on OpenAI.
+
 The outbound booking agent was skipped on your instruction. Its Retell tools
 were placeholder URLs pointing at `example.com` anyway.
 

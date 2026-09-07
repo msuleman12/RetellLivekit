@@ -22,14 +22,24 @@ and drop with nothing in the agent log.
 | | |
 |---|---|
 | LiveKit project | `wss://bblg-qupolenx.livekit.cloud` |
-| SIP host (for Twilio Origination) | `sip:bblg-qupolenx.sip.livekit.cloud;transport=tcp` |
-| Inbound trunk | `ST_e4YDr4WSECY2` |
-| Agent name | `bblg-agent-es` (must match `AGENT_NAME` in `.env`) |
+| SIP host (Twilio Origination) | `sip:se3a0fflguh.sip.livekit.cloud;transport=tcp` |
 
-The Twilio trunk carrying these numbers requires a **Credential List** — the
-LiveKit inbound trunk is created with `auth_username` / `auth_password` by
-`scripts/setup_sip.py`, so LiveKit answers every INVITE with a 401 challenge.
-Without matching credentials on the Twilio side, every call fails.
+| Number | Trunk | Dispatch rule | Agent |
+|---|---|---|---|
+| `+13254425883` | `ST_hhBgddNfqAoz` Clare | `SDR_XnpUqwKWzoWm` | `bush-bush-intake` |
+| `+16825641506` | `ST_qD9aNUmTJdHU` Bush & Bush intake line | `SDR_9y6h3GUqxsf9` | `bush-bush-intake` |
+| `+15183333606` | `ST_bAvybk9MTjj9` My inbound trunk | `SDR_9q5gxakgCuLi` | `bblg-agent-en` |
+| `+15183333620` | `ST_e4YDr4WSECY2` My Inbound Spanish | `SDR_t2innYgfbB68` | `bblg-agent-es` |
+
+This repo's worker must register as `bush-bush-intake` (`AGENT_NAME` in `.env`).
+`+13254425883` is the Clare test line for this agent. Do not move
+`+16825641506` until that test number answers correctly.
+
+The Twilio trunk for the Bush & Bush intake line requires a **Credential List**
+— that LiveKit inbound trunk was created with `auth_username` / `auth_password`
+by `scripts/setup_sip.py`, so LiveKit answers every INVITE with a 401 challenge.
+The Clare trunk has no SIP auth. Without matching credentials on an
+authenticated trunk, every call fails.
 
 ## Inspecting the live configuration
 

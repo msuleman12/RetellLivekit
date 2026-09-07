@@ -69,23 +69,39 @@ def build_stt() -> deepgram.STT:
 # agents carry exactly one tool, `end_call`, and calling it twice is harmless —
 # `finish_session` returns immediately once `state.call_ended` is set.
 # ---------------------------------------------------------------------------
-def build_llm() -> openai.LLM:
+_GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+_LLM_TIMEOUT = _httpx.Timeout(connect=5.0, read=15.0, write=10.0, pool=5.0)
+
+
+def _voice_llm(*, model: str, temperature: float) -> openai.LLM:
+    """Speaking LLM. Groq is OpenAI-compatible; post-call stays on OpenAI."""
+    if settings.llm.uses_groq:
+        return openai.LLM(
+            model=model,
+            temperature=temperature,
+            api_key=settings.llm.groq_api_key or NOT_GIVEN,
+            base_url=_GROQ_BASE_URL,
+            timeout=_LLM_TIMEOUT,
+        )
     return openai.LLM(
-        model=settings.llm.model,
-        temperature=settings.llm.temperature,
+        model=model,
+        temperature=temperature,
         api_key=settings.llm.api_key or NOT_GIVEN,
-        # Without this the plugin waits on the SDK default before it reports
-        # "Request timed out" and retries, which on a bad link means the caller
-        # sits in silence for the whole window. Fail fast, retry sooner.
-        timeout=_httpx.Timeout(connect=5.0, read=15.0, write=10.0, pool=5.0),
+        timeout=_LLM_TIMEOUT,
+    )
+
+
+def build_llm() -> openai.LLM:
+    return _voice_llm(
+        model=settings.llm.speaking_model,
+        temperature=settings.llm.temperature,
     )
 
 
 def build_router_llm() -> openai.LLM:
-    return openai.LLM(
-        model=settings.llm.router_model,
+    return _voice_llm(
+        model=settings.llm.speaking_router_model,
         temperature=settings.llm.router_temperature,
-        api_key=settings.llm.api_key or NOT_GIVEN,
     )
 
 
