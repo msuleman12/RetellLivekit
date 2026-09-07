@@ -9,7 +9,7 @@ name: Deploy LiveKit agent
 
 on:
   push:
-    branches: [main]
+    branches: [dev]
   workflow_dispatch:
 
 concurrency:
