@@ -21,6 +21,7 @@ import aiohttp
 from livekit.agents import AgentSession
 
 from . import prompts, settings, webhook
+from .capture import seed_state_from_transcript
 from .models import build_async_openai
 from .schemas import FIELDS_BY_CASE_TYPE, field_guide, json_schema_for
 from .state import CallState, normalize_phone
@@ -118,9 +119,9 @@ def _analysis_schema(case_type: str) -> tuple[dict[str, Any], str]:
     schema["schema"]["required"] = list(props.keys())
     return schema, field_guide(fields)
 def _merge_live_records(custom: dict[str, Any], state: CallState) -> None:
-    # Anything captured live is authoritative: it was heard in context, and for
-    # the phone number it also passed NANP validation, which a transcript-only
-    # pass at the end can get wrong.
+    # Regex seed + any optional live extract is authoritative for identity
+    # fields: the phone also passed NANP validation, which a transcript-only
+    # model pass can get wrong.
     #
     # Optional fields only fill gaps: the post-call model read the whole
     # transcript at once, so where it produced a value that reading wins.
@@ -134,6 +135,8 @@ def _merge_live_records(custom: dict[str, Any], state: CallState) -> None:
         custom["user_phone"] = state.phone
     if state.other_party_name:
         custom["other_party_name"] = state.other_party_name
+
+
 async def analyze(
     session: AgentSession,
     state: CallState,
@@ -144,6 +147,8 @@ async def analyze(
     """Run the extraction model over the transcript."""
     if transcript is None or transcript_object is None:
         transcript, transcript_object = build_transcript(session)
+
+    seed_state_from_transcript(state, transcript_object)
 
     payload = _base_payload(state, transcript, transcript_object)
     analysis = payload["call"]["call_analysis"]

@@ -1,14 +1,11 @@
-"""Instant, inline fast-path capture from the caller's last utterance.
+"""Deterministic field capture from a caller utterance.
 
-This used to be the *only* capture path, and that was the bug: a regex knows
-exactly the phrasings someone thought to write down. A caller who answered
-"Yes. Moss Ali." to "what's your name" matched nothing, so Claire asked again,
-and the call read like a form.
+This is not on the speaking path. Claire uses the conversation itself to
+know what she already has. After hangup, `postcall.py` runs
+`seed_state_from_transcript` once so the firm JSON still gets a NANP phone
+and a name when the regex can see them. The post-call model fills the rest.
 
-`src/extract.py` is now the primary capture path — a model reads the transcript
-after every turn and fills the same fields Retell's post-call schema uses. What
-stays here is what is genuinely deterministic and worth having immediately,
-without waiting for a model round-trip:
+What stays here is what is genuinely deterministic:
 
   * names ("Name is John Smith", a bare "Moss Ali", a confirmed read-back),
   * phone digits (spoken numbers, "oh" for zero, "double five", country codes),
@@ -23,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import Any
 
 from .state import (
     MAX_PHONE_ATTEMPTS,
@@ -600,9 +598,13 @@ def auto_capture_from_utterance(
     state: CallState,
     text: str,
     previous_agent_text: str = "",
+    *,
+    ignore_ended: bool = False,
 ) -> list[str]:
     """Update CallState from raw user text. Returns notes of what changed."""
-    if not text or not text.strip() or state.call_ended:
+    if not text or not text.strip():
+        return []
+    if state.call_ended and not ignore_ended:
         return []
 
     notes: list[str] = []
@@ -782,6 +784,48 @@ def auto_capture_from_utterance(
             notes.append("caller_done=True")
             logger.info("caller signed off — end_call unlocked")
 
+    return notes
+
+
+def seed_state_from_transcript(
+    state: CallState,
+    turns: list[dict[str, Any]] | None,
+) -> list[str]:
+    """One-shot capture after hangup. Does not speak to the caller.
+
+    `turns` is the Retell-style transcript_object (`role` is agent/user) or
+    any list of dicts with `role` and `content`. Live capture is off the
+    speaking path, so CallState is empty unless this runs.
+    """
+    if not turns:
+        return []
+
+    notes: list[str] = []
+    last_agent = ""
+    user_texts: list[str] = []
+    for turn in turns:
+        role = str(turn.get("role") or "").strip().lower()
+        content = str(turn.get("content") or "").strip()
+        if not content:
+            continue
+        if role in {"assistant", "agent"}:
+            last_agent = content
+            continue
+        if role != "user":
+            continue
+        user_texts.append(content)
+        notes.extend(
+            auto_capture_from_utterance(
+                state,
+                content,
+                previous_agent_text=last_agent,
+                ignore_ended=True,
+            )
+        )
+    notes.extend(backfill_name_from_context(state, user_texts))
+    notes.extend(backfill_incident_from_context(state, user_texts))
+    if notes:
+        logger.info("post-call seed captured: %s", ", ".join(notes))
     return notes
 
 

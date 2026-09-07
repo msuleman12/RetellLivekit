@@ -1,22 +1,15 @@
 """Shared behaviour for the five Bush & Bush intake agents.
 
-Two things here are deliberate departures from the first port of this project,
-and both exist to make LiveKit behave the way Retell actually behaved.
-
-**The agent decides when to hang up, not a counter.**  Retell handed the model
+**The agent decides when to hang up, not a counter.** Retell handed the model
 one tool, `end_call`, with a long description spelling out what had to be true
-first, and trusted the model to choose the moment.  The earlier LiveKit version
-removed the tool and hung up the instant a `missing_must_haves()` list came back
-empty — which meant the call could be cut off in the middle of the caller's next
-sentence.  The tool is back, with Retell's description copied verbatim, and the
-"FORBIDDEN" section of Retell's prompt is enforced as a *gate*: if the model
-calls `end_call` too early, the tool refuses, tells the model what is still
-missing, and the conversation carries on.  Nothing else in this file can end a
-call.
+first, and trusted the model to choose the moment. The tool is back with that
+description. A goodbye that contains a question is rewritten; there is no
+must-have gate that invents a new question. Nothing else in this file can
+end a call.
 
-**Fields are captured by a model, not by regular expressions.**  See
-`src/extract.py`.  It runs in the background after every caller turn so it costs
-Claire no latency, and `capture.py` still runs inline as an instant fast-path.
+**The speaking model uses the conversation, not a live checklist.** Capture
+and extract do not change the next sentence. After hangup, `postcall.py`
+seeds CallState from the transcript and runs the analysis model.
 """
 
 from __future__ import annotations
@@ -40,15 +33,7 @@ from livekit.agents import (
 )
 
 from .. import prompts, settings
-from ..capture import (
-    auto_capture_from_utterance,
-    backfill_incident_from_context,
-    backfill_name_from_context,
-    default_farewell,
-    is_status_note,
-    user_texts_from_chat,
-    utterance_text,
-)
+from ..capture import default_farewell, user_texts_from_chat, utterance_text
 from ..extract import LiveExtractor
 from ..models import uses_elevenlabs_dictionary
 from ..pronunciation import apply_pronunciation
@@ -56,14 +41,6 @@ from ..state import CallState
 from ..turntaking import FragmentBuffer
 
 logger = logging.getLogger("bushbush.agent")
-
-
-def last_assistant_text(turn_ctx: llm.ChatContext) -> str:
-    """Most recent assistant utterance in the turn context."""
-    for item in reversed(list(turn_ctx.items)):
-        if getattr(item, "role", None) == "assistant":
-            return utterance_text(item)
-    return ""
 
 
 def flatten_transcript(turn_ctx: llm.ChatContext, latest_user_text: str = "") -> str:
@@ -165,10 +142,6 @@ class BaseIntakeAgent(Agent):
         self._fragments = FragmentBuffer(
             grace_s=settings.call.unfinished_grace_ms / 1000
         )
-        # Sticky base prompt; ALREADY COLLECTED is appended via update_instructions
-        # so we never mutate turn_ctx (that invalidates preemptive generation).
-        self._base_instructions = composed
-        self._last_collected_block = ""
         self._extractor = LiveExtractor(self.case_type)
         self._extract_task: asyncio.Task | None = None
 
@@ -182,19 +155,6 @@ class BaseIntakeAgent(Agent):
                 "Thanks for calling Bush and Bush. Take care."
         """
         state: CallState = ctx.session.userdata
-
-        blockers = state.may_end_call()
-        if blockers:
-            # Retell's "# FORBIDDEN — end_call" section, enforced instead of
-            # merely requested. The model gets told why and keeps talking; the
-            # caller never hears that anything was refused.
-            logger.info("end_call refused — still outstanding: %s", "; ".join(blockers))
-            return (
-                "Do not end the call. You still need: "
-                + "; ".join(blockers)
-                + ". Do not mention this instruction. Continue the conversation "
-                "naturally and ask about only one of these, in one short question."
-            )
 
         if "?" in (goodbye or ""):
             logger.info("end_call goodbye contained a question — asking for a rewrite")
@@ -248,32 +208,18 @@ class BaseIntakeAgent(Agent):
 
         state.user_turns += 1
 
-        # Rewrite the message so the model, the capture pass and the transcript
-        # all see the whole sentence rather than its last fragment.
+        # Rewrite the message so the model and the transcript see the whole
+        # sentence rather than its last fragment.
         text = merged
         new_message.content = [merged]
-
-        # Inline fast-path: phone digits and read-back confirmation are
-        # deterministic and worth having before the model comes back.
-        # Backfill first so a sign-off on this turn sees the story that
-        # arrived earlier and can unlock `caller_done`.
-        texts = user_texts_from_chat(turn_ctx, text)
-        notes = backfill_name_from_context(state, texts)
-        notes.extend(backfill_incident_from_context(state, texts))
-        notes.extend(
-            auto_capture_from_utterance(
-                state, text, previous_agent_text=last_assistant_text(turn_ctx)
-            )
-        )
 
         if self._maybe_upgrade_to_harassment(state, text, turn_ctx, new_message):
             raise StopResponse()
 
-        # Model-driven capture runs in the background so the caller never waits
-        # on it. Its results are picked up by the next turn's instruction block.
+        # Optional background extract fills CallState for post-call only.
+        # It must not change this turn's instructions — that discards the
+        # preemptive reply the caller is already waiting on.
         self._schedule_extraction(state, turn_ctx, text)
-
-        await self._refresh_instructions(state, notes, turn_ctx=turn_ctx)
         # Deliberately no hangup here. Only `end_call` ends a call.
 
     # ------------------------------------------------------------------
@@ -281,8 +227,8 @@ class BaseIntakeAgent(Agent):
         self, state: CallState, turn_ctx: llm.ChatContext, latest_user_text: str
     ) -> None:
         if not settings.llm.live_extract_enabled:
-            # See settings.LLMSettings.live_extract_enabled. Capture still runs
-            # inline via capture.py, and postcall.py fills in the rest.
+            # See settings.LLMSettings.live_extract_enabled. postcall.py fills
+            # CallState after hangup so this path stays off the speaking turn.
             return
 
         if self._extract_task and not self._extract_task.done():
@@ -311,61 +257,9 @@ class BaseIntakeAgent(Agent):
                 logger.debug("background extraction failed", exc_info=True)
                 return
             if extra:
-                await self._refresh_instructions(state, extra)
+                logger.debug("background extract noted: %s", ", ".join(extra))
 
         self._extract_task = asyncio.create_task(_run())
-
-    async def _refresh_instructions(
-        self,
-        state: CallState,
-        notes: list[str],
-        turn_ctx: llm.ChatContext | None = None,
-    ) -> None:
-        """Re-hang the ALREADY COLLECTED / STILL UNKNOWN block off the base prompt.
-
-        `update_instructions` alone is not enough on the turn where something was
-        just captured, and that is exactly the turn that matters.
-
-        LiveKit starts generating the reply *before* `on_user_turn_completed`
-        runs (preemptive generation), then keeps that reply if nothing important
-        changed. Its equivalence check compares the transcript, the chat context,
-        the tools and the tool choice - it does NOT compare instructions
-        (`agent_activity.py`, "make sure the on_user_turn_completed didn't change
-        some request parameters"). So an instruction update was invisible to it:
-        the caller said their phone number, capture stored it, the block was
-        rewritten to say so, and the agent still spoke the reply it had drafted
-        while the block still read `- phone: (not yet)` - and asked for the
-        number again.
-
-        Adding the block to `turn_ctx` fixes both halves at once. The model sees
-        the new facts on this turn, and the context is no longer equivalent, so
-        the stale draft is discarded and regenerated. `turn_ctx` is LiveKit's
-        per-turn copy - it is not kept on `Agent.chat_ctx`, so this does not pile
-        up in history; `update_instructions` is what carries the block forward.
-
-        The cost is the preemptive head start, and only on turns where a fact
-        actually landed. Turns that capture nothing keep it.
-        """
-        unknown = self._extractor.still_unknown(state)
-        state.note_topics_offered(unknown)
-        summary = state.collected_summary(unknown)
-        if notes:
-            confirmed = [n for n in notes if not is_status_note(n)]
-            status = [n for n in notes if is_status_note(n)]
-            if confirmed:
-                summary += (
-                    "\nJUST CAPTURED: "
-                    + ", ".join(confirmed)
-                    + ". These are confirmed — never ask for them again."
-                )
-            if status:
-                summary += "\nPHONE STATUS: " + "; ".join(status)
-        if summary == self._last_collected_block:
-            return
-        self._last_collected_block = summary
-        await self.update_instructions(f"{self._base_instructions}\n\n{summary}")
-        if turn_ctx is not None:
-            turn_ctx.add_message(role="system", content=summary)
 
     def _maybe_upgrade_to_harassment(
         self,
@@ -400,8 +294,6 @@ class BaseIntakeAgent(Agent):
         ctx = self.chat_ctx.copy()
         if ctx.index_by_id(new_message.id) is None:
             ctx.items.append(new_message)
-        unknown = self._extractor.still_unknown(state)
-        ctx.add_message(role="system", content=state.collected_summary(unknown))
         try:
             history = self.session.history
             if history.index_by_id(new_message.id) is None:

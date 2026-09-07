@@ -1,8 +1,8 @@
 """Per-call state (LiveKit `userdata`).
 
 Retell tracked the must-haves only inside the prompt ("FORBIDDEN - end_call").
-Here they are also written via `record_*` tools into `CallState` for post-call
-analysis and for per-turn ALREADY COLLECTED injection so Claire does not re-ask.
+`CallState` holds the same fields for post-call analysis and completeness
+logs. It is not injected into the speaking prompt.
 """
 
 from __future__ import annotations
@@ -298,9 +298,8 @@ class CallState:
     def note_topics_offered(self, names: tuple[str, ...]) -> None:
         """Count one turn's worth of STILL UNKNOWN suggestions.
 
-        Idempotent within a turn: `_refresh_instructions` runs once when the
-        caller's turn completes and again when background extraction lands, and
-        a field must not burn two of its three turns for one utterance.
+        Idempotent within a turn: the same field must not burn two of its
+        three turns for one utterance if extract runs more than once.
         """
         for name in names:
             if self.topic_offer_turn.get(name) == self.user_turns:
@@ -309,11 +308,10 @@ class CallState:
             self.topic_offers[name] = self.topic_offers.get(name, 0) + 1
 
     def may_end_call(self) -> list[str]:
-        """What still blocks `end_call`. Empty list = the agent may hang up.
+        """Must-haves still outstanding plus whether the caller signed off.
 
-        This is Retell's end_call tool description turned into a check. It is a
-        *gate*, not a trigger: nothing here ever ends the call by itself, it only
-        refuses when the model tries to end one too early.
+        Used for logs and post-call completeness. The speaking tool trusts the
+        prompt; this is not a live hangup gate.
         """
         blockers = self.missing_must_haves()
         if not self.caller_done:

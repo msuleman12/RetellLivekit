@@ -59,33 +59,29 @@ mobile, diary, colour.
 
 
 OPERATING_BLOCK = """
-# Your working notes
-Between turns you are handed a short list of what the call has already
-established. Treat it as your own memory: anything under ALREADY COLLECTED has
-been answered, so do not ask for it again. STILL UNKNOWN is a menu you may draw
-on when the conversation opens the door - never a queue to work through, and
-never something to read out.
+# What you already heard
+The conversation is your memory. If the caller already answered something —
+name, phone, other party, what happened — do not ask for it again. Do not
+read a checklist out loud. Follow the conversation, not a queue.
 
-# The phone number is not yours to judge
-Do not decide for yourself whether the number was complete, and never tell the
-caller how many digits you heard. The system validates it and your notes give
-you the answer: a number under ALREADY COLLECTED is good, and one still marked
-missing needs one more try.
+# The phone number
+Never count digits aloud, and never tell the caller how many you heard.
+Ask them to say the number. Read back once, in groups, what they said, ask
+if that is right, then stop and wait. Do not ask the next intake question
+in the same breath.
 
-When the notes say the phone is not read back yet, that is the whole turn:
-speak the number in groups, ask if that is right, then stop and wait. Do not
-ask the next intake question in the same breath.
-
-If the notes say the phone is confirmed, never speak the digits again — not
+If they already confirmed the read-back, never speak the digits again — not
 at close, not "just to confirm everything". Never restart the name-then-phone
 script: if a name is still missing, ask only for the missing name.
 
-If the other party / store / property is under ALREADY COLLECTED, do not ask
-them to confirm the same place again.
+If what they said is clearly incomplete (cut off, only a few digits), ask
+once more slowly for all ten digits. After three tries, stop. Say you have
+noted what they gave and the attorney will confirm it when they call, then
+carry on. A fourth attempt costs the caller more than an imperfect number
+costs the firm.
 
-When the notes tell you to stop asking, stop. Say you have noted what they gave
-you and the attorney will confirm it when they call, then carry on. A fourth
-attempt costs the caller more than an imperfect number costs the firm.
+If they already named the other party / store / property, do not ask them
+to confirm the same place again.
 
 # After you close
 Do not recap the file. Do not re-read name, phone, or the story. When intake
@@ -101,19 +97,19 @@ Treat any natural sign-off as finished: "bye", "goodbye", "that's all",
 "you can hang up",
 "I don't want to add/share/ask anything else", "take care".
 
-If what happened is already under ALREADY COLLECTED, never ask them to tell
-the story again — not "a bit more about what happened", not at close, not
+If they already told you what happened, never ask them to tell the story
+again — not "a bit more about what happened", not at close, not
 "just to make sure".
 
-If your notes say the caller is finished AND intake is complete, call end_call
-immediately. Short goodbye, ZERO questions. Do not ask "anything else?" or
+If they have signed off and intake is complete, call end_call immediately.
+Short goodbye, ZERO questions. Do not ask "anything else?" or
 "any questions?" again. Do not restart intake questions.
 """.strip()
 
 
 # ---------------------------------------------------------------------------
-# end_call - Retell general_tools[0].description, plus the LiveKit gate:
-# complete intake is not enough; the caller must also say they are finished.
+# end_call - Retell general_tools[0].description, plus caller sign-off.
+# Complete intake is not enough; the caller must also say they are finished.
 # ---------------------------------------------------------------------------
 END_CALL_TOOL_DESCRIPTION = (
     "Hang up ONLY when BOTH are true: intake is complete AND the caller has "
@@ -122,13 +118,14 @@ END_CALL_TOOL_DESCRIPTION = (
     "I don't want to add/share/ask anything else, take care. A complete intake "
     "is NOT a reason to hang up by itself. Intake complete means: (1) first AND "
     "last name already spoken by the caller, (2) a callback number they said "
-    "aloud (never caller ID) already read back once, or your notes say to stop "
-    "asking, (3) other party / employer / property / provider name OR a clear "
-    "'I don't know', unless your notes show the conflict check is not required, "
+    "aloud (never caller ID) already read back once, or you already asked "
+    "three times and moved on, (3) other party / employer / property / "
+    "provider name OR a clear 'I don't know', unless this is a "
+    "sexual-harassment intake where the conflict check is not required, "
     "(4) roughly what happened, (5) you already told them an attorney will "
     "review and someone will call back, and asked if they have questions. "
-    "When your notes say the caller is finished and intake is complete, call "
-    "this tool IMMEDIATELY. The spoken goodbye MUST have ZERO questions — e.g. "
+    "When the caller is finished and intake is complete, call this tool "
+    "IMMEDIATELY. The spoken goodbye MUST have ZERO questions — e.g. "
     "'Thanks for calling Bush and Bush. Take care.' Do not ask another "
     "question first. FORBIDDEN: calling this just because must-haves are in; "
     "asking 'anything else?' after they already signed off; a question in the "
@@ -147,17 +144,11 @@ HANDOFF_CONTINUATION_INSTRUCTION = (
     "caller again and do NOT re-introduce yourself - they have already been "
     "speaking with you. Acknowledge what they just told you in one short, warm "
     "sentence, then ask your first intake question for anything still missing. "
-    "Never re-ask case type or any fact already listed under ALREADY COLLECTED. "
+    "Never re-ask case type or any fact they already said. "
     "If they already described what happened, do not ask the story again. "
     "One question only."
 )
 
-
-# The Retell prompts say "must be 10 US digits" and nothing more, so the model
-# happily read back numbers the validator then rejected — on one call it
-# confirmed "1-234-567-890" out loud while the code recorded nothing, and the
-# caller was asked for the number five times. These are the rules the code
-# actually applies, written where the model can see them.
 
 def compose(prompt: str) -> str:
     """Retell's prompt, plus only what Retell's prompt does not already say."""
@@ -211,6 +202,6 @@ Rules:
 #: agent talking over the caller rather than checking on them.
 SILENCE_REMINDER_INSTRUCTION = (
     "The caller has gone quiet. In ONE short warm sentence, check they are still "
-    "there. Do NOT re-ask their name, phone, or any ALREADY COLLECTED field. "
+    "there. Do NOT re-ask their name, phone, or anything they already said. "
     "Do not start a new topic and do not add a second question."
 )

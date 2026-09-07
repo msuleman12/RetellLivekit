@@ -45,9 +45,9 @@ src/
   prompts.py      the Retell prompts, verbatim, with their source ids
   schemas.py      post_call_analysis_data for all five agents
   models.py       Deepgram STT / OpenAI LLM / ElevenLabs TTS / VAD / turn-taking
-  state.py        per-call state, the must-have rules, the end_call gate
-  extract.py      live model-driven field capture (Retell's analysis, during the call)
-  capture.py      instant regex fast-path for phone digits and read-backs
+  state.py        per-call state, must-have tracking for post-call
+  extract.py      optional background field capture (off by default)
+  capture.py      post-call regex seed for phone digits and names
   routing.py      case-type classification: keyword pass, then the model
   lifecycle.py    reminders, max duration, silence hangup
   postcall.py     post-call extraction + webhook delivery
@@ -55,7 +55,7 @@ src/
   worker.py       the LiveKit worker (entry point for calls)
   api.py          the control API
   agents/
-    base.py        the end_call tool and its gate, plus background capture
+    base.py        the end_call tool (prompt-trusted) plus optional extract
     router.py      the conversation-flow equivalent
     accident.py employment.py premises.py malpractice.py harassment.py
 scripts/
@@ -206,31 +206,27 @@ Interactive docs are at `http://localhost:8000/docs`.
 | `post_call_analysis_data` | `src/schemas.py` (26/26/23/24/22 fields) |
 | `post_call_analysis_model` gpt-5-mini | `POST_CALL_ANALYSIS_MODEL` |
 | webhook `call_analyzed` | `postcall.py` — same event name and payload shape |
-| `end_call` tool | the agent's only tool, description verbatim, now genuinely enforced (below) |
-| the second model that filled `post_call_analysis_data` | `src/extract.py`, run during the call instead of after it |
+| `end_call` tool | the agent's only tool, description verbatim; the prompt decides when to hang up |
+| the second model that filled `post_call_analysis_data` | `src/postcall.py` after hangup; optional live extract stays off by default |
 
 ### Deliberate differences
 
-1. **`end_call` is enforced, not just requested.** Retell's prompt said
-   "FORBIDDEN — never end_call while you are still asking for anything", and the
-   model mostly complied. Here the tool checks `CallState.may_end_call()` and
-   refuses, telling the model exactly what is still outstanding — the caller
-   hears an ordinary question instead of a hang-up. Same contract, no longer
-   optional. Nothing else in the codebase can end a call.
+1. **`end_call` is prompt-trusted, the way Retell was.** The specialist
+   prompts and the tool description spell out when hangup is allowed. The tool
+   only rewrites a goodbye that contains a question. There is no
+   `may_end_call()` refusal that invents a new intake question. Nothing else
+   in the codebase can end a call except router decline and lifecycle
+   watchdogs.
 
-2. **The caller decides when the call is over.** `may_end_call()` blocks the
-   tool until the caller has actually said they are finished, and `extract.py`
-   revokes that the moment they start talking again. A complete intake is not a
-   reason to hang up; it only means Claire can stop asking.
+2. **The caller decides when the call is over.** A complete intake is not a
+   reason to hang up. The prompt requires a natural sign-off (bye, that's all,
+   I'm done, no questions) before `end_call`.
 
-3. **Fields are captured by a model, not by patterns.** Retell's speaking model
-   never carried a checklist — a second model read the transcript afterwards.
-   `src/extract.py` runs that second model during the call, in the background,
-   so it costs no reply latency, using the same field names as `schemas.py`.
-   `capture.py` stays in front of it as an instant fast-path for the things that
-   are genuinely deterministic: phone digits, read-back confirmations, "I don't
-   know", and a caller signing off. If the extraction model is unreachable it
-   disables itself after three failures and the fast-path carries the call.
+3. **The speaking model has no live checklist.** Retell's speaking model never
+   carried one — a second model read the transcript afterwards. Claire uses
+   the conversation itself. `capture.py` runs once after hangup to seed NANP
+   phone and name into the firm JSON; `postcall.py` fills the rest. Live
+   extract stays off by default and must not change the next sentence.
 
 4. **Sexual harassment relaxes the conflict check.** Retell marked
    `other_party_name` required on four agents but optional on that one, with
@@ -292,17 +288,17 @@ body to `POST_CALL_WEBHOOK_URL`:
 }
 ```
 
-Precedence, highest first: the four must-haves captured live (heard in context,
-and for the phone number validated against the NANP), then the post-call model's
-reading of the whole transcript, then anything `extract.py` picked up live that
-the post-call pass left null.
+Precedence, highest first: the post-call regex seed (NANP-validated phone and
+name when the patterns can see them), then the post-call model's reading of
+the whole transcript, then anything optional live extract recorded that the
+post-call pass left null.
 
 A note on phone numbers: Retell's field says "must be a valid 10-digit US
 number", but a transcript-only reading will happily return something like
-`1290909490` when the caller says "plus one" and then nine digits. Both the live
-and post-call paths now check the NANP rules — area code and exchange must start
-2-9 — and drop the value rather than send the firm a number that cannot be
-dialed.
+`1290909490` when the caller says "plus one" and then nine digits. The post-call
+regex seed and the analysis path both check the NANP rules — area code and
+exchange must start 2-9 — and drop the value rather than send the firm a
+number that cannot be dialed.
 
 ---
 

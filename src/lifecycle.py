@@ -241,11 +241,7 @@ class CallLifecycle:
                     self._state.reminder_count += 1
                     logger.debug("sending silence reminder %d", self._reminders_sent)
                     self._session.generate_reply(
-                        instructions=(
-                            prompts.SILENCE_REMINDER_INSTRUCTION
-                            + "\n"
-                            + self._state.collected_summary()
-                        )
+                        instructions=prompts.SILENCE_REMINDER_INSTRUCTION
                     )
         except asyncio.CancelledError:  # pragma: no cover
             raise

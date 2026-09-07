@@ -25,9 +25,9 @@ Two processes: `python -m src.worker` (calls) and `uvicorn src.api:app` (control
 | `src/prompts.py` | Verbatim Retell prompts; edit here, never paraphrase in agents |
 | `src/schemas.py` | Post-call field definitions (source of truth for extract + webhook) |
 | `src/models.py` | STT/LLM/TTS/VAD/turn-handling factories + shared AsyncOpenAI |
-| `src/state.py` | Per-call `CallState`, NANP phone rules, `may_end_call()` |
-| `src/capture.py` | Inline regex fast-path (phone, read-back, sign-off) |
-| `src/extract.py` | Background live field capture (off by default) |
+| `src/state.py` | Per-call `CallState`, NANP phone rules, post-call completeness |
+| `src/capture.py` | Post-call regex seed (phone, read-back, sign-off) — not on the speaking path |
+| `src/extract.py` | Optional background field capture (off by default; does not change the speaking prompt) |
 | `src/routing.py` | Keyword pass then LLM classify |
 | `src/lifecycle.py` | Reminders, max duration, silence hangup |
 | `src/postcall.py` | Analysis + disk record + `call_analyzed` webhook |
@@ -40,7 +40,7 @@ Two processes: `python -m src.worker` (calls) and `uvicorn src.api:app` (control
 - Preserve Retell parity: numeric settings live in `settings.py` with explicit conversion functions, not magic numbers in agents.
 - Prompts in `prompts.py` are copied verbatim. Changing call behaviour means editing prompts/settings, not inventing a new agent stack.
 - Handoff is `session.update_agent(..., chat_ctx=..., greet=False)` — never re-greet, never invent `transfer_*` tools.
-- Only `end_call` (gated by `CallState.may_end_call()`), router decline via `finish_session`, and lifecycle watchdogs may hang up. Capture/extract never end a call.
+- Only `end_call` (prompt-trusted; goodbye must contain no `?`), router decline via `finish_session`, and lifecycle watchdogs may hang up. Capture/extract never end a call and never change the speaking prompt.
 - Do not pass `parallel_tool_calls` or `tool_choice` to a tool-less agent (the router). OpenAI 400s and the call goes silent after the greeting.
 - One agent registry: `AGENTS_BY_CASE_TYPE` in `src/agents/router.py`. New specialists get a `source_prompt` class attribute.
 - Phone digits go through `normalize_phone`. Prefer `asyncio.create_task` and `time.monotonic()` for watchdogs.

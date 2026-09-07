@@ -19,18 +19,17 @@ self.session.update_agent(agent_cls(chat_ctx=chat_ctx, greet=False))
 
 New practice areas subclass `BaseIntakeAgent`, register in `AGENTS_BY_CASE_TYPE` / router `_AGENTS`, and add fields in `schemas.py` + prompts in `prompts.py`. Harassment keeps `require_other_party = False`.
 
-## Hangup gate
+## Hangup
 
-`end_call` is the intake agents' only tool. It must refuse when `may_end_call()` is non-empty (tell the model what is missing; caller never hears the refusal). Goodbye must contain no `?`. Complete intake is not a hangup reason — the caller saying they are finished is.
+`end_call` is the intake agents' only tool. The prompt decides when to call it. Goodbye must contain no `?` — rewrite if it does. Complete intake is not a hangup reason — the caller saying they are finished is. Do not refuse `end_call` with a `may_end_call()` checklist; that invents a new question.
 
 Lifecycle watchdogs (max duration, silence) and router polite-decline may call `finish_session`. Nothing in `capture.py` / `extract.py` hangs up.
 
 ## Capture vs extract vs instructions
 
-- `capture.py`: instant, deterministic (phone digits, NANP, read-back, "I don't know", sign-off).
-- `extract.py`: background model; skip if `LIVE_EXTRACT_ENABLED` is false, utterance `< 3` words, or a prior extract is in flight. It only records.
-- Refresh Claire's memory with `update_instructions`, never by mutating `turn_ctx` (that kills preemptive generation).
-- `collected_summary()` is facts only — rules live in `prompts.py` once.
+- Speaking model uses the conversation. Do not inject `ALREADY COLLECTED` / `STILL UNKNOWN` into the prompt or `turn_ctx` (that discards preemptive generation).
+- `capture.py`: post-call regex seed only (`seed_state_from_transcript`). Phone digits, NANP, read-back, "I don't know", sign-off.
+- `extract.py`: optional background model; skip if `LIVE_EXTRACT_ENABLED` is false, utterance `< 3` words, or a prior extract is in flight. It only records CallState. It must not refresh speaking instructions.
 
 ## Models / latency
 
