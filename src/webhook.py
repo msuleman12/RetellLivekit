@@ -25,6 +25,8 @@ Three deliberate differences from `services/zapier_webhook.py`:
 * **`address` and `dob` are always empty.** The old build collected them; the
   Retell agents this port reproduces never asked for either. The keys are kept
   so the payload shape does not change under the Zap, but nothing fills them.
+  `city` is the exception and is filled: Claire asks every caller which city
+  the incident happened in, so the key is additive rather than a shape change.
 
 Nothing here decides what the agent says or when a call ends. It only reports.
 """
@@ -59,7 +61,14 @@ _AGENT_NAME_BY_CASE_TYPE = {
 #: Belong to the `user` section; excluded from the agent-specific section so
 #: they are not sent twice under two different names.
 _USER_LEVEL_FIELDS = frozenset(
-    {"user_fname", "user_lname", "user_phone", "user_email", "preferred_contact"}
+    {
+        "user_fname",
+        "user_lname",
+        "user_phone",
+        "user_email",
+        "preferred_contact",
+        "incident_city",
+    }
 )
 
 
@@ -85,6 +94,9 @@ def _user_object(state: CallState, custom: dict[str, Any], summary: str) -> dict
         "preferred_contact": custom.get("preferred_contact")
         or optional.get("preferred_contact")
         or "",
+        # The city the incident happened in, not a home address - that is the
+        # one piece of location Claire asks every caller for.
+        "city": custom.get("incident_city") or optional.get("incident_city") or "",
         "address": "",
         "dob": "",
         "call_summary": summary or "",

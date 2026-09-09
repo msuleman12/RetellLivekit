@@ -203,7 +203,7 @@ Interactive docs are at `http://localhost:8000/docs`.
 | `ring_duration_ms` 17000 | trunk `ringing_timeout` |
 | `handbook_config` toggles | `prompts.HANDBOOK_BLOCK`, appended to every agent |
 | `expressive_mode_prompt` | `prompts.EXPRESSIVE_BLOCK` |
-| `post_call_analysis_data` | `src/schemas.py` (26/26/23/24/22 fields) |
+| `post_call_analysis_data` | `src/schemas.py` (27/27/24/25/23 fields) |
 | `post_call_analysis_model` gpt-5-mini | `POST_CALL_ANALYSIS_MODEL` |
 | webhook `call_analyzed` | `postcall.py` — same event name and payload shape |
 | `end_call` tool | the agent's only tool, description verbatim; the prompt decides when to hang up |
@@ -259,6 +259,20 @@ Interactive docs are at `http://localhost:8000/docs`.
    and must-haves are unchanged. Set `LATENCY_PROFILE=parity` for Retell timing.
    Speaking LLMs can use Groq via `LLM_PROVIDER=groq`; post-call analysis stays
    on OpenAI.
+
+10. **Email and incident city are asked, not hoped for.** Retell buried the
+   email behind a contact-preference follow-up and never asked for a city, so
+   `user_email` came back empty on most calls. All five prompts now ask for the
+   email right after the phone read-back and for the city while the caller
+   tells the story. Both are single asks that accept a refusal and never block
+   the close — the must-haves are unchanged. `incident_city` is a new field on
+   all five schemas and rides the Zapier `user` object as `city`.
+
+11. **The four specialist prompts follow the accident layout.** They kept their
+   own must-haves, follow-ups and wording, but the numbered checklist gave way
+   to the accident agent's "order that feels human" plus explicit "if they
+   already told you, that answer counts" lines. Rigid numbering was what made
+   those four re-ask questions the caller had already answered.
 
 The outbound booking agent was skipped on your instruction. Its Retell tools
 were placeholder URLs pointing at `example.com` anyway.
