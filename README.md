@@ -24,7 +24,7 @@ formula in `src/settings.py`, so nothing was silently dropped.
                                                         │
        ┌────────────┬──────────────┬────────────┬───────┴──────┐
        ▼            ▼              ▼            ▼              ▼
-   Accident    Employment      Premises    Malpractice    Harassment      (gpt-4.1-mini)
+   Accident    Employment      Premises    Malpractice    Harassment      (gpt-4.1-nano)
        └────────────┴──────────────┴────────────┴──────────────┘
                                   │
                        end of call ▼
@@ -51,7 +51,6 @@ src/
   routing.py      case-type classification: keyword pass, then the model
   lifecycle.py    reminders, max duration, silence hangup
   postcall.py     post-call extraction + webhook delivery
-  pronunciation.py  the Retell pronunciation dictionary
   worker.py       the LiveKit worker (entry point for calls)
   api.py          the control API
   agents/
@@ -186,16 +185,16 @@ Interactive docs are at `http://localhost:8000/docs`.
 | `agent_swap` node | `session.update_agent` — carries `chat_ctx`, no re-greeting |
 | `clarify-before-decline` node | `router.py` asks again; decline needs the model to return `other` *after* a clarifying question |
 | `Polite Decline` end node | `_DECLINE_FAREWELL` in `router.py` |
-| `retell-llm` gpt-4.1-mini @ 0.55 | `openai.LLM(model="gpt-4.1-mini", temperature=0.55)` |
+| `retell-llm` gpt-4.1-mini @ 0.55 | `openai.LLM(model="gpt-4.1-nano", …)` — deliberate: nano for both specialists and router (lowest OpenAI TTFT) |
 | flow model gpt-4.1-nano | agent-level llm override on the router |
 | `11labs-Nico` / `eleven_flash_v2_5` | `elevenlabs.TTS(model="eleven_flash_v2_5")` |
 | `voice_speed` 1.12 | `VoiceSettings.speed` |
 | `voice_temperature` 1.15 | `VoiceSettings.stability` 0.425 (inverted scale — see `settings.stability_from_voice_temperature`) |
 | `interruption_sensitivity` 0.85 | `InterruptionOptions.min_duration` 0.247 s |
 | `responsiveness` 0.95 | `EndpointingOptions` 0.193 s / 3.693 s, fixed mode |
-| `custom_stt_config` deepgram 450 ms | `deepgram.STT(endpointing_ms=450)` |
+| `custom_stt_config` deepgram 450 ms | `deepgram.STT(endpointing_ms=450)` (fast profile defaults to 200) |
 | `boosted_keywords` | Deepgram `keyterm` |
-| `pronunciation_dictionary` (IPA) | ElevenLabs dictionary if configured, else phonetic respelling in `src/pronunciation.py` |
+| `pronunciation_dictionary` (IPA) | Optional ElevenLabs dictionary IDs only — no local respelling fallback |
 | `denoising_mode` | LiveKit `BVCTelephony` noise cancellation |
 | `max_call_duration_ms` 664000 | `lifecycle.py` watchdog |
 | `end_call_after_silence_ms` 261000 | `lifecycle.py` watchdog |
@@ -254,11 +253,14 @@ Interactive docs are at `http://localhost:8000/docs`.
    `greet=False` — same handoff as the router, no transfer tool.
 
 9. **`LATENCY_PROFILE=fast` (the default) is deliberately snappier than Retell.**
-   Semantic endpointing uses a 0.35s / 2.0s window instead of waiting out a 4s
-   ceiling on short answers, and `UNFINISHED_GRACE_MS` defaults to 800. Prompts
-   and must-haves are unchanged. Set `LATENCY_PROFILE=parity` for Retell timing.
-   Speaking LLMs can use Groq via `LLM_PROVIDER=groq`; post-call analysis stays
-   on OpenAI.
+   STT endpointing defaults to 200ms, turn detection defaults to silence-only
+   VAD (`TURN_DETECTION=vad`), and speaking LLMs use `gpt-4.1-nano` for both
+   router and specialists (OpenAI's lowest time-to-first-token chat model;
+   `gpt-5-nano` is cheaper but slower for voice because it reasons). Set
+   `LATENCY_PROFILE=parity` and `LLM_MODEL=gpt-4.1-mini` for closer Retell
+   timing/quality. Speaking LLMs can use Groq via `LLM_PROVIDER=groq`; post-call
+   analysis stays on OpenAI. Optional ElevenLabs pronunciation dictionary IDs
+   still work; the old local `pronunciation.py` respelling fallback is gone.
 
 10. **Email and incident city are asked, not hoped for.** Retell buried the
    email behind a contact-preference follow-up and never asked for a city, so

@@ -49,7 +49,9 @@ def build_stt() -> deepgram.STT:
 
 
 # ---------------------------------------------------------------------------
-# LLM - Retell: gpt-4.1-mini @ 0.55 (practice agents), gpt-4.1-nano (router)
+# LLM - Retell used gpt-4.1-mini (specialists) + gpt-4.1-nano (router).
+# Both speaking paths default to gpt-4.1-nano here: OpenAI's lowest-TTFT
+# chat model without a reasoning step (faster than gpt-5-nano for voice).
 #
 # NOTE - do not reintroduce `parallel_tool_calls` here.
 #
@@ -176,12 +178,6 @@ def build_tts() -> elevenlabs.TTS:
     )
 
 
-def uses_elevenlabs_dictionary() -> bool:
-    return bool(
-        settings.tts.pronunciation_dict_id and settings.tts.pronunciation_dict_version_id
-    )
-
-
 # ---------------------------------------------------------------------------
 # VAD
 # ---------------------------------------------------------------------------
@@ -224,18 +220,10 @@ def build_vad() -> silero.VAD:
 def build_turn_detection() -> object:
     """Decide when the caller has stopped talking.
 
-    ``"vad"`` means silence alone: after N ms of quiet the turn is over, whether
-    or not the sentence was finished. That is what let "So my name is" and
-    "I was" become turns of their own, each with its own reply.
-
-    The alternative is a small model that reads the transcript and predicts
-    whether a person would carry on. `version="v1-mini"` is the ~108MB local
-    build - it runs in the worker's own inference executor, so unlike the
-    hosted `v1` detector it adds no network round-trip. Download it once with:
+    Default is silence-only VAD (lowest latency). Set TURN_DETECTION=eou for
+    the local semantic model (`v1-mini`); download once with:
 
         python -m livekit.agents download-files
-
-    Set TURN_DETECTION=vad in .env to go back to silence-only.
     """
     if not settings.call.semantic_turns:
         logger.info("turn detection: VAD only (TURN_DETECTION=vad)")

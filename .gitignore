@@ -55,6 +55,13 @@ _to_delete/
 *.stale
 *.tmp
 
+# --- Archify diagrams (local visualization only) -----------------------------
+diagrams/
+.agents/
+.cursor/skills/
+.cursor/rules/archify.mdc
+skills-lock.json
+
 # --- Editors / OS ------------------------------------------------------------
 .vscode/
 .idea/

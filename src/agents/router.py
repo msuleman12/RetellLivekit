@@ -72,7 +72,7 @@ class RouterAgent(Agent):
             instructions=prompts.ROUTER_INSTRUCTIONS,
             tools=[],
             # Retell ran the flow on gpt-4.1-nano while the destination agents
-            # ran on gpt-4.1-mini. Agent-level llm overrides the session llm.
+            # Agent-level llm overrides the session llm (both default nano).
             llm=models.build_router_llm(),
         )
         # Transcript the classifier last ran on. Deepgram often finalises one

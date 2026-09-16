@@ -1,6 +1,6 @@
 ---
 description: LiveKit agent, routing, capture, and hangup rules for the voice path
-globs: "src/agents/**/*.py,src/worker.py,src/lifecycle.py,src/models.py,src/routing.py,src/capture.py,src/extract.py,src/state.py,src/pronunciation.py"
+globs: "src/agents/**/*.py,src/worker.py,src/lifecycle.py,src/models.py,src/routing.py,src/capture.py,src/extract.py,src/state.py"
 alwaysApply: false
 ---
 
@@ -33,12 +33,12 @@ Lifecycle watchdogs (max duration, silence) and router polite-decline may call `
 
 ## Models / latency
 
-- Fast profile **must** set `turn_detection="vad"`. Omitting it defaults to cloud TurnDetector (~1–2s RTT).
+- Defaults: `LATENCY_PROFILE=fast`, `TURN_DETECTION=vad`, speaking LLMs `gpt-4.1-nano`.
+- Fast profile **must** keep `turn_detection="vad"` unless you explicitly opt into local `eou`.
 - Do not set Deepgram `utterance_end_ms` or ElevenLabs `chunk_length_schedule`.
 - Do not put `parallel_tool_calls` / `tool_choice` on `build_router_llm()` or any `tools=[]` agent.
 - VAD is prewarmed per process in `worker.prewarm`.
-- Pronunciation: ElevenLabs dictionary if configured, else `pronunciation.apply_pronunciation` in `tts_node`.
-
+- Pronunciation: optional ElevenLabs dictionary IDs on `build_tts()` only — no local respelling.
 ## Phone numbers
 
 Use `normalize_phone` / `is_valid_us_number` (NANP: 10 digits, area/exchange start 2–9). Never scan a longer digit string for "any valid window". Invalid → ask again; after `MAX_PHONE_ATTEMPTS` stop asking and flag unverified.

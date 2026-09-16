@@ -183,7 +183,12 @@ class STTSettings:
 
 @dataclass(frozen=True)
 class LLMSettings:
-    """Retell: practice agents gpt-4.1-mini @0.55, router flow gpt-4.1-nano."""
+    """Speaking LLMs default to gpt-4.1-nano (lowest OpenAI TTFT).
+
+    Retell used gpt-4.1-mini for specialists and gpt-4.1-nano for the router;
+    both speaking paths use nano here for latency. Post-call stays on
+    POST_CALL_ANALYSIS_MODEL.
+    """
 
     api_key: str = field(default_factory=lambda: _str("OPENAI_API_KEY"))
     #: openai (default) or groq. Groq is OpenAI-compatible and only used for
@@ -199,7 +204,7 @@ class LLMSettings:
     groq_router_model: str = field(
         default_factory=lambda: _str("GROQ_ROUTER_LLM_MODEL", "openai/gpt-oss-20b")
     )
-    model: str = field(default_factory=lambda: _str("LLM_MODEL", "gpt-4.1-mini"))
+    model: str = field(default_factory=lambda: _str("LLM_MODEL", "gpt-4.1-nano"))
     temperature: float = field(default_factory=lambda: _float("LLM_TEMPERATURE", 0.55))
     router_model: str = field(default_factory=lambda: _str("ROUTER_LLM_MODEL", "gpt-4.1-nano"))
     router_temperature: float = field(
@@ -213,18 +218,18 @@ class LLMSettings:
     # runs that same idea during the call, in the background, so Claire can stay
     # conversational and still never re-ask something she was already told.
     live_extract_model: str = field(
-        default_factory=lambda: _str("LIVE_EXTRACT_MODEL", "gpt-4.1-mini")
+        default_factory=lambda: _str("LIVE_EXTRACT_MODEL", "gpt-4.1-nano")
     )
     live_extract_timeout_ms: int = field(
         default_factory=lambda: _int("LIVE_EXTRACT_TIMEOUT_MS", 6_000)
     )
-    #: Off by default. The live extractor is a second gpt-4.1-mini request, with
-    #: the full 26-field JSON schema, fired after each caller turn — and it
-    #: shares one connection pool with the reply the caller is waiting on. On a
-    #: home uplink it never finished inside its 6s budget anyway, so it bought
-    #: nothing and cost `llm_ttft`. Nothing is lost that matters: `capture.py`
-    #: still records phone, name, read-back and the conflict check inline with
-    #: no network at all, and `postcall.py` extracts every field once the call
+    #: Off by default. The live extractor is a second LLM request with the
+    #: full field JSON schema after each caller turn — and it shares one
+    #: connection pool with the reply the caller is waiting on. On a home
+    #: uplink it rarely finished inside its budget, so it bought nothing and
+    #: cost `llm_ttft`. Nothing is lost that matters: `capture.py` still
+    #: records phone, name, read-back and the conflict check inline with no
+    #: network at all, and `postcall.py` extracts every field once the call
     #: has ended, where latency is nobody's problem.
     #:
     #: Set LIVE_EXTRACT_ENABLED=true once the worker runs somewhere with a fast
@@ -322,15 +327,12 @@ class CallSettings:
     noise_cancellation: str = field(
         default_factory=lambda: _str("NOISE_CANCELLATION", "BVCTelephony")
     )
-    #: "eou" runs a small local model that reads the transcript and decides
-    #: whether the caller has finished; "vad" goes on silence alone. The model
-    #: is what lets the endpointing floor come back down - without it the only
-    #: way to stop the agent answering "So my name is" is to make every turn
-    #: wait longer.
+    #: "vad" (default) = silence alone, lowest latency. "eou" = local semantic
+    #: turn model when USE_TURN_DETECTOR=true (needs download-files).
     turn_detection: str = field(
-        default_factory=lambda: _str("TURN_DETECTION", "eou").lower()
+        default_factory=lambda: _str("TURN_DETECTION", "vad").lower()
     )
-    use_turn_detector: bool = field(default_factory=lambda: _bool("USE_TURN_DETECTOR", True))
+    use_turn_detector: bool = field(default_factory=lambda: _bool("USE_TURN_DETECTOR", False))
     #: How long to wait for the rest of a sentence before answering the part we
     #: have. Only applies to utterances that read as cut off mid-thought.
     unfinished_grace_ms: int = field(

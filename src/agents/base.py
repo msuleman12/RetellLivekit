@@ -17,13 +17,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import AsyncIterable
-
-from livekit import api, rtc
+from livekit import api
 from livekit.agents import (
     Agent,
     AgentSession,
-    ModelSettings,
     NOT_GIVEN,
     RunContext,
     StopResponse,
@@ -35,8 +32,6 @@ from livekit.agents import (
 from .. import prompts, settings
 from ..capture import default_farewell, user_texts_from_chat, utterance_text
 from ..extract import LiveExtractor
-from ..models import uses_elevenlabs_dictionary
-from ..pronunciation import apply_pronunciation
 from ..state import CallState
 from ..turntaking import FragmentBuffer
 
@@ -313,16 +308,3 @@ class BaseIntakeAgent(Agent):
         logger.info("upgrading employment -> harassment (no transfer tool)")
         self.session.update_agent(HarassmentAgent(chat_ctx=ctx, greet=False))
         return True
-
-    # -- pronunciation dictionary fallback ---------------------------------
-    async def tts_node(
-        self, text: AsyncIterable[str], model_settings: ModelSettings
-    ) -> AsyncIterable[rtc.AudioFrame]:
-        if uses_elevenlabs_dictionary():
-            return Agent.default.tts_node(self, text, model_settings)
-
-        async def _respelled() -> AsyncIterable[str]:
-            async for chunk in text:
-                yield apply_pronunciation(chunk)
-
-        return Agent.default.tts_node(self, _respelled(), model_settings)
