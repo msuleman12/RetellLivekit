@@ -1,341 +1,70 @@
-# Bush & Bush Law Group — LiveKit intake agent
+# Bush & Bush Law Group - Phone Intake Agent
 
-A code rebuild of the Retell setup: the same Claire, the same routing, the same
-prompts, the same call behaviour — running on LiveKit Agents with ElevenLabs
-voice, driven entirely by config and an HTTP API instead of a dashboard.
+Inbound phone intake agent on LiveKit Agents 1.8. A caller dials the firm's
+number, Twilio sends the call to a LiveKit SIP trunk, the dispatch rule starts
+this worker, and Claire answers.
 
-Prompts are copied **verbatim** from the Retell agents. Every numeric setting
-Retell exposed is either carried over directly or converted with an explicit
-formula in `src/settings.py`, so nothing was silently dropped.
+**Pipeline:** Deepgram Flux STT (with its own end-of-turn detection) → OpenAI
+→ ElevenLabs custom voice, with Krisp BVCTelephony noise cancellation.
 
----
+## How a call flows
 
-## What it does
+1. `RouterAgent` greets the caller and works out the matter. It calls
+   `route_call` to hand off, or `end_call` to politely decline once a
+   clarifying question shows the matter is out of scope.
+2. A practice-area agent (accident, employment, premises liability, medical
+   malpractice, sexual harassment) takes over with the conversation so far and
+   runs intake. Employment can switch to sexual harassment mid-call.
+3. The agent calls `end_call` once intake is complete and the caller signs off.
+   Closing the session deletes the room, which hangs up the phone line.
+4. After hangup, `services/post_call.py` extracts intake fields from the
+   transcript, writes `call_records/<start>_<call_id>.json`, and posts it to
+   `POST_CALL_WEBHOOK_URL` and `ZAPIER_WEBHOOK_URL` if they are set.
 
-```
-  +1 682 564 1506 (Twilio)
-            │  SIP
-            ▼
-  LiveKit inbound trunk ── dispatch rule ──▶ room ──▶ this worker
-                                                        │
-                                                   RouterAgent  (gpt-4.1-nano)
-                                                   "Claire", one question,
-                                                   works out the case type
-                                                        │
-       ┌────────────┬──────────────┬────────────┬───────┴──────┐
-       ▼            ▼              ▼            ▼              ▼
-   Accident    Employment      Premises    Malpractice    Harassment      (gpt-4.1-nano)
-       └────────────┴──────────────┴────────────┴──────────────┘
-                                  │
-                       end of call ▼
-                 post-call analysis (gpt-5-mini)
-                 → JSON on disk + POST to your webhook
-```
-
-The router carries the conversation across the handoff, so the specialist picks
-up mid-conversation and never re-greets — exactly like Retell's `agent_swap`.
-
----
+Silent callers get `SILENCE_REMINDERS` check-ins, then a goodbye. Calls are cut
+off after `MAX_CALL_DURATION_S`.
 
 ## Layout
 
 ```
-src/
-  settings.py     all config + the Retell→LiveKit conversion formulas
-  prompts.py      the Retell prompts, verbatim, with their source ids
-  schemas.py      post_call_analysis_data for all five agents
-  models.py       Deepgram STT / OpenAI LLM / ElevenLabs TTS / VAD / turn-taking
-  state.py        per-call state, must-have tracking for post-call
-  extract.py      optional background field capture (off by default)
-  capture.py      post-call regex seed for phone digits and names
-  routing.py      case-type classification: keyword pass, then the model
-  lifecycle.py    reminders, max duration, silence hangup
-  postcall.py     post-call extraction + webhook delivery
-  worker.py       the LiveKit worker (entry point for calls)
-  api.py          the control API
-  agents/
-    base.py        the end_call tool (prompt-trusted) plus optional extract
-    router.py      the conversation-flow equivalent
-    accident.py employment.py premises.py malpractice.py harassment.py
-scripts/
-  setup_sip.py    one-time trunk + dispatch rule creation
-  list_voices.py  list ElevenLabs voices and write ELEVEN_VOICE_ID
+main.py                     worker entrypoint (AgentServer, session, call timers)
+config.py                   environment settings, required keys checked at startup
+agents/
+  router/agent.py           greeting + routing
+  base/agent.py             shared intake behavior (end_call, takeover turn)
+  accident/ employment/ premises_liability/ medical_malpractice/ sexual_harassment/
+  user_data.py              per-call state (session.userdata)
+prompts/                    every prompt, one file per agent
+services/
+  voice_pipeline.py         Deepgram / OpenAI / ElevenLabs / VAD / turn handling
+  post_call.py              transcript analysis, call record, webhooks
+  analysis_fields.py        fields extracted per practice area
+  zapier_webhook.py         payload shape the firm's existing Zap expects
+utils/phone.py              US phone normalization
+api/server.py               control API (test sessions, call records)
+livekit/                    SIP trunk / dispatch rule record
+deployment/                 systemd unit + server bootstrap
 ```
 
----
-
-## Setup
-
-Python 3.10+.
-
-```powershell
-cd D:\LivekitAgent
-python -m venv .venv
-.\.venv\Scripts\activate
-pip install -r requirements.txt
-
-copy .env.example .env
-notepad .env
-```
-
-### Keys you need
-
-| Variable | Where from |
-|---|---|
-| `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | LiveKit Cloud project settings |
-| `DEEPGRAM_API_KEY` | Deepgram console |
-| `OPENAI_API_KEY` | OpenAI platform |
-| `ELEVENLABS_API_KEY`, `ELEVEN_VOICE_ID` | ElevenLabs — **the voice id is the one thing I could not carry over**, see below |
-| `POST_CALL_WEBHOOK_URL` | your Zapier catch hook (or anything else) |
-
-**About the voice.** Retell referenced the voice as `11labs-Nico` / `retell-Nico`
-— that is Retell's internal alias, not an ElevenLabs voice id. Open your
-ElevenLabs voice library, pick Nico (or whichever voice you licensed), copy its
-voice id, and put it in `ELEVEN_VOICE_ID`. Everything else about the voice —
-model, speed, stability — is already set to the Retell equivalents.
-
----
-
-## Running
-
-Two processes.
-
-```powershell
-# the voice worker - answers calls
-python -m src.worker dev        # development, hot reload
-python -m src.worker start      # production
-
-# the control API
-uvicorn src.api:app --host 0.0.0.0 --port 8000
-```
-
-Talk to it without a phone: `POST /sessions` returns a room and a join token you
-can paste into the LiveKit Agents Playground.
-
----
-
-## Wiring the phone number
-
-Retell held `+1 682 564 1506` as a custom number on your Twilio SIP trunk
-(`hanzalatesting.pstn.twilio.com`). LiveKit needs the mirror of that. There are
-two halves, and they are independent.
-
-### Half 1 — LiveKit side (safe; does not move the number)
-
-```powershell
-setup_number.bat
-```
-
-or `python scripts\setup_sip.py`. It creates the inbound trunk and the dispatch
-rule, generates SIP credentials for you, saves them to `sip_config.json` and
-`.env`, and prints the Twilio settings for later. Your live number keeps
-answering wherever it answers today — this only prepares the destination.
-
-Flags: `--list` (show what exists), `--dry-run` (plan only), `--replace`
-(recreate), `--number +1...`, `--username` / `--password` to supply your own.
-
-### Half 2 — Twilio side (this is the actual cutover)
-
-Only when you are ready. In Twilio → Elastic SIP Trunking → your trunk:
-
-- **Origination**: add `sip:<your-project>.sip.livekit.cloud;transport=tcp`
-- **Authentication**: a credential list with the username/password from
-  `sip_config.json`
-- **Numbers**: `+1 682 564 1506` assigned to that trunk
-
-The exact values are printed at the end of Half 1. The moment the Origination
-URI changes the number leaves Retell — one number can only ring one place.
-
-**Suggestion:** buy a second Twilio number for a few dollars and point that at
-LiveKit first. Test Claire end to end on it, then move the real line.
-
----
-
-## Control API
-
-Every route needs `x-api-key: <API_KEY from .env>`.
-
-| Method | Path | What it does |
-|---|---|---|
-| GET | `/health` | liveness |
-| GET | `/config` | the effective settings, with the Retell values traceable |
-| GET | `/agents` | the router and the five specialists |
-| GET | `/agents/{case_type}/prompt` | the exact prompt an agent is running |
-| POST | `/sessions` | new room + agent dispatch + a join token |
-| POST | `/calls/outbound` | dial a number into the intake flow |
-| GET | `/calls` | saved post-call records, newest first |
-| GET | `/calls/{call_id}` | one full record incl. transcript and analysis |
+## Run
 
 ```bash
-curl -H "x-api-key: change-me" http://localhost:8000/config
-curl -X POST -H "x-api-key: change-me" -H "content-type: application/json" \
-     -d '{}' http://localhost:8000/sessions
+python -m venv .venv
+.venv/Scripts/activate            # Windows  (Linux: source .venv/bin/activate)
+pip install -r requirements.txt
+cp .env.example .env              # fill in the keys
+
+python main.py download-files     # VAD + noise cancellation models
+python main.py console            # talk to it in the terminal
+python main.py dev                # connect to LiveKit for phone testing
+python main.py start              # production
 ```
 
-Interactive docs are at `http://localhost:8000/docs`.
+Control API: `uvicorn api.server:app --host 0.0.0.0 --port 8000` (needs `API_KEY`).
 
----
+## Deploy
 
-## Retell → LiveKit parity
-
-| Retell | Here |
-|---|---|
-| conversation flow `..._87ebb53291b2` | `src/agents/router.py` |
-| `extract_dynamic_variables` (`case_type`) | `routing.classify_case_type_llm` — same model, enum description verbatim from `prompts.ROUTER_CASE_TYPE_RULES`, with a keyword fast-path in front of it |
-| `agent_swap` node | `session.update_agent` — carries `chat_ctx`, no re-greeting |
-| `clarify-before-decline` node | `router.py` asks again; decline needs the model to return `other` *after* a clarifying question |
-| `Polite Decline` end node | `_DECLINE_FAREWELL` in `router.py` |
-| `retell-llm` gpt-4.1-mini @ 0.55 | `openai.LLM(model="gpt-4.1-nano", …)` — deliberate: nano for both specialists and router (lowest OpenAI TTFT) |
-| flow model gpt-4.1-nano | agent-level llm override on the router |
-| `11labs-Nico` / `eleven_flash_v2_5` | `elevenlabs.TTS(model="eleven_flash_v2_5")` |
-| `voice_speed` 1.12 | `VoiceSettings.speed` |
-| `voice_temperature` 1.15 | `VoiceSettings.stability` 0.425 (inverted scale — see `settings.stability_from_voice_temperature`) |
-| `interruption_sensitivity` 0.85 | `InterruptionOptions.min_duration` 0.247 s |
-| `responsiveness` 0.95 | `EndpointingOptions` 0.193 s / 3.693 s, fixed mode |
-| `custom_stt_config` deepgram 450 ms | `deepgram.STT(endpointing_ms=450)` (fast profile defaults to 200) |
-| `boosted_keywords` | Deepgram `keyterm` |
-| `pronunciation_dictionary` (IPA) | Optional ElevenLabs dictionary IDs only — no local respelling fallback |
-| `denoising_mode` | LiveKit `BVCTelephony` noise cancellation |
-| `max_call_duration_ms` 664000 | `lifecycle.py` watchdog |
-| `end_call_after_silence_ms` 261000 | `lifecycle.py` watchdog |
-| `reminder_trigger_ms` / `reminder_max_count` | `lifecycle.py` silence nudges |
-| `ring_duration_ms` 17000 | trunk `ringing_timeout` |
-| `handbook_config` toggles | `prompts.HANDBOOK_BLOCK`, appended to every agent |
-| `expressive_mode_prompt` | `prompts.EXPRESSIVE_BLOCK` |
-| `post_call_analysis_data` | `src/schemas.py` (27/27/24/25/23 fields) |
-| `post_call_analysis_model` gpt-5-mini | `POST_CALL_ANALYSIS_MODEL` |
-| webhook `call_analyzed` | `postcall.py` — same event name and payload shape |
-| `end_call` tool | the agent's only tool, description verbatim; the prompt decides when to hang up |
-| the second model that filled `post_call_analysis_data` | `src/postcall.py` after hangup; optional live extract stays off by default |
-
-### Deliberate differences
-
-1. **`end_call` is prompt-trusted, the way Retell was.** The specialist
-   prompts and the tool description spell out when hangup is allowed. The tool
-   only rewrites a goodbye that contains a question. There is no
-   `may_end_call()` refusal that invents a new intake question. Nothing else
-   in the codebase can end a call except router decline and lifecycle
-   watchdogs.
-
-2. **The caller decides when the call is over.** A complete intake is not a
-   reason to hang up. The prompt requires a natural sign-off (bye, that's all,
-   I'm done, no questions) before `end_call`.
-
-3. **The speaking model has no live checklist.** Retell's speaking model never
-   carried one — a second model read the transcript afterwards. Claire uses
-   the conversation itself. `capture.py` runs once after hangup to seed NANP
-   phone and name into the firm JSON; `postcall.py` fills the rest. Live
-   extract stays off by default and must not change the next sentence.
-
-4. **Sexual harassment relaxes the conflict check.** Retell marked
-   `other_party_name` required on four agents but optional on that one, with
-   "do not push hard if the caller is distressed". That agent's `end_call` does
-   not block on it.
-
-5. **`volume` (1.7) has no equivalent.** It was a Retell playback gain. Set the
-   level on the Twilio trunk if the line is quiet; ElevenLabs has no volume
-   parameter and boosting it in code would clip.
-
-6. **The spoken opener uses the full firm name.** Retell's `begin_message`
-   said "thanks for calling Bush and Bush". Here it is "Bush and Bush Law
-   Group", matching the rest of the prompts. Restart the worker after changing
-   it.
-
-7. **AI identity is not a blunt disclosure.** Retell's `ai_disclosure` toggle
-   had Claire say she is an AI assistant immediately. Here she answers with a
-   short reassurance that AI helps people work through problems, then continues
-   intake. She still must not claim to be human. Restart the worker after
-   changing the prompt.
-
-8. **Employment can upgrade to harassment mid-call.** Retell classified once in
-   the router. If the caller later makes sexual harassment explicit ("harassing
-   me sexually at work"), this worker swaps to the harassment specialist with
-   `greet=False` — same handoff as the router, no transfer tool.
-
-9. **`LATENCY_PROFILE=fast` (the default) is deliberately snappier than Retell.**
-   STT endpointing defaults to 200ms, turn detection defaults to silence-only
-   VAD (`TURN_DETECTION=vad`), and speaking LLMs use `gpt-4.1-nano` for both
-   router and specialists (OpenAI's lowest time-to-first-token chat model;
-   `gpt-5-nano` is cheaper but slower for voice because it reasons). Set
-   `LATENCY_PROFILE=parity` and `LLM_MODEL=gpt-4.1-mini` for closer Retell
-   timing/quality. Speaking LLMs can use Groq via `LLM_PROVIDER=groq`; post-call
-   analysis stays on OpenAI. Optional ElevenLabs pronunciation dictionary IDs
-   still work; the old local `pronunciation.py` respelling fallback is gone.
-
-10. **Email and incident city are asked, not hoped for.** Retell buried the
-   email behind a contact-preference follow-up and never asked for a city, so
-   `user_email` came back empty on most calls. All five prompts now ask for the
-   email right after the phone read-back and for the city while the caller
-   tells the story. Both are single asks that accept a refusal and never block
-   the close — the must-haves are unchanged. `incident_city` is a new field on
-   all five schemas and rides the Zapier `user` object as `city`.
-
-11. **The four specialist prompts follow the accident layout.** They kept their
-   own must-haves, follow-ups and wording, but the numbered checklist gave way
-   to the accident agent's "order that feels human" plus explicit "if they
-   already told you, that answer counts" lines. Rigid numbering was what made
-   those four re-ask questions the caller had already answered.
-
-The outbound booking agent was skipped on your instruction. Its Retell tools
-were placeholder URLs pointing at `example.com` anyway.
-
----
-
-## Post-call data
-
-Every call writes `call_records/<timestamp>_<call_id>.json` and POSTs the same
-body to `POST_CALL_WEBHOOK_URL`:
-
-```json
-{
-  "event": "call_analyzed",
-  "call": {
-    "call_id": "...", "case_type": "employment",
-    "agent_name": "Bush & Bush Law Group - Employment",
-    "from_number": "+1...", "duration_ms": 214000,
-    "transcript": "Agent: ...\nUser: ...",
-    "transcript_object": [ ... ],
-    "call_analysis": {
-      "custom_analysis_data": { "user_fname": "...", "...": "..." },
-      "call_summary": "...", "user_sentiment": "Neutral",
-      "call_successful": true, "in_voicemail": false
-    }
-  }
-}
-```
-
-Precedence, highest first: the post-call regex seed (NANP-validated phone and
-name when the patterns can see them), then the post-call model's reading of
-the whole transcript, then anything optional live extract recorded that the
-post-call pass left null.
-
-A note on phone numbers: Retell's field says "must be a valid 10-digit US
-number", but a transcript-only reading will happily return something like
-`1290909490` when the caller says "plus one" and then nine digits. The post-call
-regex seed and the analysis path both check the NANP rules — area code and
-exchange must start 2-9 — and drop the value rather than send the firm a
-number that cannot be dialed.
-
----
-
-## Notes
-
-- **Never pass `parallel_tool_calls` or `tool_choice` to an agent that has no
-  tools.** OpenAI rejects both with a 400 (`'parallel_tool_calls' is only
-  allowed when 'tools' are specified`), and LiveKit forwards them without
-  checking — see `livekit/agents/inference/llm.py`, which the OpenAI plugin's
-  `LLMStream` subclasses. The router is the tool-less agent here. When this was
-  wired up, every router reply 400'd and the agent went completely silent: the
-  greeting still played, because `session.say()` is TTS only and never reaches
-  the LLM, so the call sounded connected but never answered. Do not reintroduce
-  either parameter on `build_router_llm()` or any `tools=[]` agent.
-
-- `USE_TURN_DETECTOR=true` uses LiveKit's semantic turn detector. It needs
-  LiveKit Cloud reachability; if it can't start, the agent falls back to VAD and
-  logs a warning.
-- `livekit-plugins-noise-cancellation` ships as a platform wheel. If pip can't
-  install it on your machine, everything still runs — you just lose background
-  noise cancellation. Set `NOISE_CANCELLATION=off` to silence the warning.
-- Changing a prompt means editing `src/prompts.py` and restarting the worker.
-  There is no draft/publish split, so nothing can sit unpublished the way the
-  Retell router and intake agent currently are.
+Pushing to `dev` runs `.github/workflows/deploy.yaml`, which syncs the code to
+`/var/www/bblg-livekit-agent`, installs requirements and restarts
+`bblg-livekit-agent.service` (`python main.py start`). The deploy fails unless
+the worker logs `registered worker`.

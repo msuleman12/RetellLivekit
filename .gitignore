@@ -1,72 +1,27 @@
-# --- Secrets -----------------------------------------------------------------
-# .env holds the LiveKit, Deepgram, OpenAI and ElevenLabs keys. It must never be
-# committed. .env.example is the template and MUST stay tracked, so it is
-# negated explicitly - `.env.*` alone would swallow it.
+# Secrets - .env holds every API key. .env.example stays tracked.
 .env
 .env.*
 !.env.example
-.env.bak*
 
-# --- Virtual environments ----------------------------------------------------
+# Virtual environments
 .venv/
 venv/
-env/
-ENV/
 
-# --- Python build / cache ----------------------------------------------------
+# Python cache
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-build/
-dist/
-*.egg-info/
-.eggs/
-.pytest_cache/
-.mypy_cache/
 .ruff_cache/
-.tox/
-.coverage
-.coverage.*
-htmlcov/
+.mypy_cache/
 
-# --- Call data ---------------------------------------------------------------
-# Every call writes call_records/<timestamp>_<call_id>.json containing the
-# caller's name, phone number and their account of what happened. That is client
-# data: it belongs on the machine that took the call and on the webhook
-# endpoint, never in a git history.
+# Call records contain client data; they stay on the machine that took the call.
 call_records/
-recordings/
 
-# --- Runtime output ----------------------------------------------------------
+# Runtime output
 *.log
 logs/
-# Written by scripts/setup_sip.py after it creates the trunk and dispatch rule;
-# contains LiveKit trunk ids specific to one deployment.
-sip_config.json
 
-# --- Scratch -----------------------------------------------------------------
-_local_backups/
-_to_delete/
-.retell-fix/
-*.orig
-*.rej
-*.bak
-*.stale
-*.tmp
-
-# --- Archify diagrams (local visualization only) -----------------------------
-diagrams/
-.agents/
-.cursor/skills/
-.cursor/rules/archify.mdc
-skills-lock.json
-
-# --- Editors / OS ------------------------------------------------------------
+# Editors / OS
 .vscode/
 .idea/
-*.swp
-*.swo
 .DS_Store
 Thumbs.db
-desktop.ini
