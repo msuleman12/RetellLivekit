@@ -48,6 +48,9 @@ class LiveKitConfig:
     api_secret: str = _required("LIVEKIT_API_SECRET")
     # Must match the agentName on the SIP dispatch rule, or calls ring and drop.
     agent_name: str = _str("AGENT_NAME", "bush-bush-intake")
+    # Worker health-check HTTP port. The older ai-receptionist services on this
+    # server already hold 8081 and 8082, so this one defaults elsewhere.
+    http_port: int = _int("AGENT_HTTP_PORT", 8083)
 
 
 @dataclass(frozen=True)

@@ -41,7 +41,7 @@ def _ms(seconds: float | None) -> str:
 
 
 # Post-call analysis runs during job shutdown; the 10s default can cut it off.
-server = AgentServer(shutdown_process_timeout=60.0)
+server = AgentServer(shutdown_process_timeout=60.0, port=LIVEKIT.http_port)
 
 
 @server.rtc_session(agent_name=LIVEKIT.agent_name)
