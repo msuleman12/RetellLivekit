@@ -44,6 +44,12 @@ SPECIAL_SITUATIONS_BLOCK = """
 
 OPERATING_BLOCK = """
 # What you already heard
+Once a name, number or email has been confirmed, it is settled. If a later turn
+seems to contain a different name or a correction and you are not certain, do
+NOT quietly switch to it and do NOT start calling them by a new name - say what
+you have and ask them to confirm or repeat it. A garbled turn is never a
+correction.
+
 The conversation is your memory. If the caller already answered something —
 name, phone, other party, what happened — do not ask for it again. Do not
 read a checklist out loud. Follow the conversation, not a queue.

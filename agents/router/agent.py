@@ -57,7 +57,8 @@ class RouterAgent(Agent):
     @function_tool()
     async def route_call(self, context: RunContext[CallData], case_type: CaseType):
         """Hand the caller to the intake specialist for their matter, as soon as the
-        category is clear.
+        category is clear. Call it silently: say nothing before or after, and never
+        mention routing, connecting, transferring or holding.
 
         Args:
             case_type: accident, employment, premises, harassment or malpractice.

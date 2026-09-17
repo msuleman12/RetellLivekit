@@ -12,6 +12,7 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     CloseEvent,
+    ConversationItemAddedEvent,
     JobContext,
     UserStateChangedEvent,
     cli,
@@ -35,6 +36,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(na
 logger = logging.getLogger("intake")
 
 
+def _ms(seconds: float | None) -> str:
+    return "-" if seconds is None else f"{seconds * 1000:.0f}ms"
+
+
 # Post-call analysis runs during job shutdown; the 10s default can cut it off.
 server = AgentServer(shutdown_process_timeout=60.0)
 
@@ -42,17 +47,11 @@ server = AgentServer(shutdown_process_timeout=60.0)
 @server.rtc_session(agent_name=LIVEKIT.agent_name)
 async def entrypoint(ctx: JobContext) -> None:
     await ctx.connect()
-    participant = await ctx.wait_for_participant()
-    attrs = participant.attributes
 
-    data = CallData(
-        call_id=attrs.get("sip.callID") or ctx.room.name,
-        room_name=ctx.room.name,
-        from_number=attrs.get("sip.phoneNumber", ""),
-        to_number=attrs.get("sip.trunkPhoneNumber", ""),
-    )
-    ctx.log_context_fields = {"room": ctx.room.name, "call_id": data.call_id}
-    logger.info("call from %s to %s", mask_phone(data.from_number), mask_phone(data.to_number))
+    # The caller's SIP details are read after the session starts. Waiting for
+    # them first delayed the greeting by seconds of silence on the line.
+    data = CallData(call_id=ctx.room.name, room_name=ctx.room.name)
+    ctx.log_context_fields = {"room": ctx.room.name}
 
     session = AgentSession[CallData](
         userdata=data,
@@ -62,6 +61,23 @@ async def entrypoint(ctx: JobContext) -> None:
         turn_handling=build_turn_handling(),
         user_away_timeout=CALL.user_away_timeout_s,
     )
+
+    # How long the caller waited for Claire to start speaking, per turn.
+    latencies: list[float] = []
+
+    @session.on("conversation_item_added")
+    def on_item_added(ev: ConversationItemAddedEvent) -> None:
+        metrics = ev.item.metrics if ev.item.type == "message" and ev.item.role == "assistant" else {}
+        if (e2e := metrics.get("e2e_latency")) is None:
+            return
+        latencies.append(e2e)
+        logger.info(
+            "reply latency %s | end of turn %s + llm %s + tts %s",
+            _ms(e2e),
+            _ms(metrics.get("end_of_turn_delay")),
+            _ms(metrics.get("llm_node_ttft")),
+            _ms(metrics.get("tts_node_ttfb")),
+        )
 
     async def end_call(goodbye: str, reason: str) -> None:
         data.end(reason)
@@ -101,6 +117,13 @@ async def entrypoint(ctx: JobContext) -> None:
         if silence_task:
             silence_task.cancel()
         data.end("user_hangup")
+        if latencies:
+            logger.info(
+                "call latency: average %s, slowest %s, over %d replies",
+                _ms(sum(latencies) / len(latencies)),
+                _ms(max(latencies)),
+                len(latencies),
+            )
         await post_call.run(session, data)
 
     ctx.add_shutdown_callback(on_shutdown)
@@ -116,6 +139,14 @@ async def entrypoint(ctx: JobContext) -> None:
             delete_room_on_close=True,
         ),
     )
+
+    participant = session.room_io.linked_participant or await ctx.wait_for_participant()
+    attrs = participant.attributes
+    data.call_id = attrs.get("sip.callID") or ctx.room.name
+    data.from_number = attrs.get("sip.phoneNumber", "")
+    data.to_number = attrs.get("sip.trunkPhoneNumber", "")
+    ctx.log_context_fields = {"room": ctx.room.name, "call_id": data.call_id}
+    logger.info("call from %s to %s", mask_phone(data.from_number), mask_phone(data.to_number))
 
 
 if __name__ == "__main__":
