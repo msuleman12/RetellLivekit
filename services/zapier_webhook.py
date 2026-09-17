@@ -21,6 +21,7 @@ AGENT_NAME_BY_CASE_TYPE = {
 
 _USER_FIELDS = {
     "user_fname", "user_lname", "user_phone", "user_email", "preferred_contact", "incident_city",
+    "user_address", "user_dob",
 }
 
 
@@ -42,9 +43,8 @@ def build_payload(data: CallData, custom: dict[str, Any], summary: str) -> dict[
             "call_number": data.from_number,
             "preferred_contact": custom.get("preferred_contact") or "",
             "city": custom.get("incident_city") or "",
-            # Keys kept so the Zap's field mapping does not break.
-            "address": "",
-            "dob": "",
+            "address": custom.get("user_address") or "",
+            "dob": custom.get("user_dob") or "",
             "call_summary": summary,
             "is_test_call": False,
             "language": "en",

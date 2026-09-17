@@ -37,8 +37,9 @@ class RouterAgent(Agent):
     def __init__(self) -> None:
         decline = EndCallTool(
             extra_description=(
-                "Use ONLY after a clarifying question has been asked and answered and "
-                "the matter is clearly none of the five practice areas."
+                "Use ONLY in two cases: (1) a clarifying question has been asked and "
+                "answered and the matter is clearly none of the five practice areas, or "
+                "(2) an existing client gave their name and callback number and signed off."
             ),
             end_instructions=DECLINE_INSTRUCTIONS,
             delete_room=True,

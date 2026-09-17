@@ -170,12 +170,67 @@ HARASSMENT_FIELDS: tuple[AnalysisField, ...] = (
     F("sh_additional_notes", "Any other important context the caller shared that doesn't fit elsewhere.", conditional_prompt="Only populate if relevant."),
 )
 
+# Fields for the caller-detail and case questions shared with the GPT-Live build.
+_ONLY_IF = "Only populate if the caller said it."
+COMMON_EXTRA_FIELDS = (
+    F("user_address", "The caller's mailing address as they said it.", conditional_prompt=_ONLY_IF),
+    F("user_dob", "The caller's date of birth, written like 'March 4, 1985'.", conditional_prompt=_ONLY_IF),
+    F("existing_client", "True if the caller said they already have a case with the firm.", type="boolean", conditional_prompt=_ONLY_IF),
+    F("caller_is_affected_person", "True if the caller is the person this happened to; false if calling for someone else.", type="boolean", conditional_prompt=_ONLY_IF),
+    F("affected_person_name_and_relation", "If calling for someone else: that person's name and relationship to the caller.", conditional_prompt=_ONLY_IF),
+    F("considering_changing_attorney", "True if they have another attorney and are thinking of changing firms.", type="boolean", conditional_prompt=_ONLY_IF),
+)
+ACCIDENT_EXTRA_FIELDS = (
+    F("accident_time", "Roughly what time the accident happened.", conditional_prompt=_ONLY_IF),
+    F("accident_driver", "True if the caller was the driver.", type="boolean", conditional_prompt=_ONLY_IF),
+    F("accident_passengers_count", "How many passengers were in the caller's vehicle.", type="number", conditional_prompt=_ONLY_IF),
+    F("police_report_number", "The police report number.", conditional_prompt=_ONLY_IF),
+    F("accident_emotional_impact", "Stress, anxiety, trouble sleeping or other emotional effects.", conditional_prompt=_ONLY_IF),
+    F("accident_treatment_location", "Where and when they received medical treatment.", conditional_prompt=_ONLY_IF),
+    F("pre_existing_conditions", "Earlier injuries or conditions they mentioned.", conditional_prompt=_ONLY_IF),
+    F("vehicle_type", "Type of vehicle the caller was in.", type="enum", choices=("personal", "commercial", "government"), conditional_prompt=_ONLY_IF),
+    F("vehicle_damage", "How badly the caller's vehicle was damaged.", conditional_prompt=_ONLY_IF),
+    F("insurance_claim_number", "The insurance claim number.", conditional_prompt=_ONLY_IF),
+    F("um_coverage", "True if the caller has uninsured/underinsured motorist coverage.", type="boolean", conditional_prompt=_ONLY_IF),
+    F("financial_hardship", "Any financial hardship caused by the accident.", conditional_prompt=_ONLY_IF),
+)
+EMPLOYMENT_EXTRA_FIELDS = (
+    F("employer_location", "Where the employer is located.", conditional_prompt=_ONLY_IF),
+    F("employer_size", "Roughly how many employees the employer has.", conditional_prompt=_ONLY_IF),
+    F("employment_timeline", "Key events in order, briefly.", conditional_prompt=_ONLY_IF),
+    F("employment_reported_to", "Who they reported the issue to.", conditional_prompt=_ONLY_IF),
+    F("employment_effects_professional", "Effect on their reputation, references or career.", conditional_prompt=_ONLY_IF),
+    F("employment_disability_or_pregnancy_issue", "Disability or pregnancy discrimination they described.", conditional_prompt=_ONLY_IF),
+    F("employment_illegal_act_refusal", "True if punished for refusing to do something illegal.", type="boolean", conditional_prompt=_ONLY_IF),
+    F("employment_safety_violations", "Workplace safety violations they described.", conditional_prompt=_ONLY_IF),
+)
+PREMISES_EXTRA_FIELDS = (
+    F("caller_is_injured", "True if the caller is the injured person.", type="boolean", conditional_prompt=_ONLY_IF),
+    F("premises_incident_time", "Roughly what time it happened.", conditional_prompt=_ONLY_IF),
+    F("premises_report_number", "The incident report number.", conditional_prompt=_ONLY_IF),
+    F("premises_footwear", "What shoes the caller was wearing.", conditional_prompt=_ONLY_IF),
+    F("premises_emotional_impact", "Emotional effects they described.", conditional_prompt=_ONLY_IF),
+    F("premises_future_medical", "Whether they expect more treatment.", conditional_prompt=_ONLY_IF),
+    F("pre_existing_conditions", "Earlier injuries or conditions they mentioned.", conditional_prompt=_ONLY_IF),
+    F("premises_caller_insurance", "Whether the caller has insurance that may cover it.", conditional_prompt=_ONLY_IF),
+)
+MALPRACTICE_EXTRA_FIELDS = (
+    F("mm_staff_names", "Names of other medical staff involved.", conditional_prompt=_ONLY_IF),
+    F("mm_additional_notes", "Anything else the caller wanted the attorney to know.", conditional_prompt=_ONLY_IF),
+)
+HARASSMENT_EXTRA_FIELDS = (
+    F("sh_people_involved", "Who was involved, e.g. supervisor or coworker (role only if no name given).", conditional_prompt=_ONLY_IF),
+    F("sh_hr_response", "How HR or the manager responded to the report.", conditional_prompt=_ONLY_IF),
+    F("sh_lost_wages", "Estimate of lost wages so far.", conditional_prompt=_ONLY_IF),
+    F("sh_career_impact", "Effect on their ability to keep working in their role or industry.", conditional_prompt=_ONLY_IF),
+)
+
 FIELDS_BY_CASE_TYPE: dict[str, tuple[AnalysisField, ...]] = {
-    "accident": ACCIDENT_FIELDS,
-    "employment": EMPLOYMENT_FIELDS,
-    "premises": PREMISES_FIELDS,
-    "malpractice": MALPRACTICE_FIELDS,
-    "harassment": HARASSMENT_FIELDS,
+    "accident": ACCIDENT_FIELDS + ACCIDENT_EXTRA_FIELDS + COMMON_EXTRA_FIELDS,
+    "employment": EMPLOYMENT_FIELDS + EMPLOYMENT_EXTRA_FIELDS + COMMON_EXTRA_FIELDS,
+    "premises": PREMISES_FIELDS + PREMISES_EXTRA_FIELDS + COMMON_EXTRA_FIELDS,
+    "malpractice": MALPRACTICE_FIELDS + MALPRACTICE_EXTRA_FIELDS + COMMON_EXTRA_FIELDS,
+    "harassment": HARASSMENT_FIELDS + HARASSMENT_EXTRA_FIELDS + COMMON_EXTRA_FIELDS,
 }
 
 
