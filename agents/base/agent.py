@@ -10,8 +10,10 @@ from prompts.common_prompts import (
     END_CALL_DESCRIPTION,
     END_CALL_INSTRUCTIONS,
     HANDOFF_INSTRUCTIONS,
+    RELATIVE_DATES_BLOCK,
     compose,
 )
+from utils.dates import spoken_date
 
 logger = logging.getLogger("intake.agent")
 
@@ -29,7 +31,10 @@ class BaseIntakeAgent(Agent):
             # The takeover turn must speak, never hang up.
             ignore_on_enter=True,
         )
-        super().__init__(instructions=compose(self.prompt), chat_ctx=chat_ctx, tools=[end_call])
+        instructions = "\n\n".join(
+            [compose(self.prompt), RELATIVE_DATES_BLOCK.format(today=spoken_date())]
+        )
+        super().__init__(instructions=instructions, chat_ctx=chat_ctx, tools=[end_call])
 
     async def on_enter(self) -> None:
         data: CallData = self.session.userdata

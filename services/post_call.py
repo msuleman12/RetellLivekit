@@ -14,6 +14,7 @@ from config import OPENAI, POST_CALL
 from prompts.common_prompts import POST_CALL_SYSTEM
 from services import zapier_webhook
 from services.analysis_fields import FIELDS_BY_CASE_TYPE, field_guide, json_schema_for
+from utils.dates import spoken_date
 from utils.phone import normalize_us_phone
 
 logger = logging.getLogger("intake.post_call")
@@ -49,8 +50,10 @@ def build_transcript(session: AgentSession) -> tuple[str, list[dict[str, Any]]]:
     return "\n".join(lines), turns
 
 
-async def analyze(case_type: str, transcript: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Returns (custom_analysis_data, summary fields)."""
+async def analyze(
+    case_type: str, transcript: str, call_date: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Returns (custom_analysis_data, summary fields). call_date resolves relative dates."""
     fields = FIELDS_BY_CASE_TYPE[case_type]
     schema = json_schema_for(fields, f"intake_{case_type}_analysis")
     schema["schema"]["properties"].update(_SUMMARY_FIELDS)
@@ -64,7 +67,8 @@ async def analyze(case_type: str, transcript: str) -> tuple[dict[str, Any], dict
                 {"role": "system", "content": POST_CALL_SYSTEM},
                 {
                     "role": "user",
-                    "content": f"Practice area: {case_type}\n\nFields to extract:\n"
+                    "content": f"Practice area: {case_type}\n"
+                    f"Call date: {call_date}\n\nFields to extract:\n"
                     f"{field_guide(fields)}\n\nTranscript:\n{transcript}",
                 },
             ],
@@ -98,7 +102,7 @@ async def run(session: AgentSession, data: CallData) -> None:
     if data.case_type and transcript:
         # The transcript is saved even if analysis fails, so no call is ever lost.
         try:
-            custom, summary = await analyze(data.case_type, transcript)
+            custom, summary = await analyze(data.case_type, transcript, spoken_date(data.started_at))
         except Exception:
             logger.exception("post-call analysis failed")
 

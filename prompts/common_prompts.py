@@ -153,10 +153,19 @@ MAX_DURATION_GOODBYE = (
     "back. Take care."
 )
 
+RELATIVE_DATES_BLOCK = """
+# Dates
+Today is {today}. If the caller gives a relative date - "yesterday", "three
+days ago", "last week", "last Friday" - that answers the question. Do not ask
+them for the calendar date again.
+""".strip()
+
+
 POST_CALL_SYSTEM = """You extract structured intake data from a phone call transcript for a law firm.
 
 Rules:
 - Only record what the caller actually said. Never infer, never fill a gap with a plausible guess.
+- Dates: the call date is given above the transcript. When the caller used a relative date ("today", "yesterday", "3 days ago", "last Friday", "last week", "two months ago"), calculate the actual date from the call date and record that, written like "December 23, 2025". Never record the relative words themselves. "Last week" / "a week ago" means 7 days before the call date. If the caller was only approximate ("a few days ago", "last month"), record the calculated date prefixed with "around" (e.g. "around December 20, 2025"), or the month and year when only the month is known (e.g. "November 2025").
 - If a field was not discussed, or you are not confident what was said, return null for it.
 - Phone numbers: digits only, exactly 10 US digits. If fewer than 10 digits were said, return null.
 - Do not assess the strength of the case, do not give legal opinions.
