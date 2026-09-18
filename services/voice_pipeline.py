@@ -56,6 +56,10 @@ def build_turn_handling() -> TurnHandlingOptions:
         # Flux already waited for end of turn; do not pad it.
         endpointing={"mode": "fixed", "min_delay": 0.0, "max_delay": 2.0},
         interruption={
+            # Set explicitly: LiveKit turns adaptive off by default in
+            # production, leaving plain VAD, which treats "okay" and "mm-hmm"
+            # as interruptions.
+            "mode": "adaptive",
             "min_duration": CALL.interruption_min_duration_s,
             "resume_false_interruption": True,
         },
