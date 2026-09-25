@@ -5,9 +5,9 @@ Deepgram Flux decides when the caller has finished speaking
 """
 
 from livekit.agents import TurnHandlingOptions
-from livekit.plugins import deepgram, elevenlabs, openai
+from livekit.plugins import deepgram, elevenlabs, groq, openai
 
-from config import DEEPGRAM, ELEVENLABS, KEYTERMS, OPENAI, CALL
+from config import DEEPGRAM, ELEVENLABS, GROQ, KEYTERMS, OPENAI, CALL
 
 
 def build_stt() -> deepgram.STTv2:
@@ -21,7 +21,18 @@ def build_stt() -> deepgram.STTv2:
     )
 
 
-def build_llm(model: str = OPENAI.model, temperature: float = OPENAI.temperature) -> openai.LLM:
+def build_llm(
+    model: str = OPENAI.model,
+    temperature: float = OPENAI.temperature,
+    *,
+    groq_model: str = GROQ.model,
+) -> openai.LLM:
+    """Each caller names the model it wants on both providers; ENABLE_GROQ_LLM
+    picks between them. Groq's LLM subclasses the OpenAI one against Groq's
+    OpenAI-compatible endpoint, so the session wiring is identical either way.
+    """
+    if GROQ.enabled:
+        return groq.LLM(model=groq_model, temperature=temperature, api_key=GROQ.api_key)
     return openai.LLM(model=model, temperature=temperature, api_key=OPENAI.api_key)
 
 

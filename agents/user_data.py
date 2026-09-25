@@ -17,6 +17,19 @@ class CallData:
     agent_name: str = ""
     handoffs: list[dict[str, Any]] = field(default_factory=list)
     disconnect_reason: str = ""
+    # Set whenever a human was asked for: when the call was handed over, when the
+    # attempt failed, and when policy refused it and the AI carried on alone.
+    transfer_requested: bool = False
+    transfer_attempted: bool = False
+    transfer_succeeded: bool = False
+    transfer_target: str = ""
+    transfer_reason: str = ""
+    # The number dialled, and the SIP code the trunk gave back on a failure.
+    transfer_destination: str = ""
+    transfer_sip_code: int | None = None
+    # One word for what became of it, so records can be filtered: connected,
+    # no_answer, trunk_error, not_configured, no_sip_caller, error, declined_*.
+    transfer_outcome: str = ""
 
     @property
     def duration_ms(self) -> int:
@@ -41,4 +54,12 @@ class CallData:
             "agent_name": self.agent_name,
             "handoffs": self.handoffs,
             "disconnection_reason": self.disconnect_reason,
+            "transfer_requested": self.transfer_requested,
+            "transfer_attempted": self.transfer_attempted,
+            "transfer_succeeded": self.transfer_succeeded,
+            "transfer_target": self.transfer_target,
+            "transfer_reason": self.transfer_reason,
+            "transfer_destination": self.transfer_destination,
+            "transfer_sip_code": self.transfer_sip_code,
+            "transfer_outcome": self.transfer_outcome,
         }

@@ -56,6 +56,13 @@ def build_payload(data: CallData, custom: dict[str, Any], summary: str) -> dict[
             "room_name": data.room_name,
             "duration_ms": data.duration_ms,
             "disconnection_reason": data.disconnect_reason,
+            "transferred_to": data.transfer_target if data.transfer_succeeded else "",
+            "transfer_requested": data.transfer_requested,
+            "transfer_attempted": data.transfer_attempted,
+            "transfer_succeeded": data.transfer_succeeded,
+            "transfer_reason": data.transfer_reason,
+            "transfer_outcome": data.transfer_outcome,
+            "transfer_sip_code": data.transfer_sip_code,
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
     }

@@ -73,6 +73,44 @@ class OpenAIConfig:
 
 
 @dataclass(frozen=True)
+class GroqConfig:
+    """Groq's OpenAI-compatible endpoint, used to cut time-to-first-token.
+
+    Off by default. Turning it on moves the conversation and router models onto
+    Groq; post-call analysis stays on OpenAI either way, because it runs after
+    the caller has hung up and its latency costs nobody anything.
+    """
+
+    enabled: bool = _bool("ENABLE_GROQ_LLM", False)
+    api_key: str = _str("GROQ_API_KEY", "")
+    # Deliberately not one of the gpt-oss reasoning models: their hidden
+    # thinking tokens land before the first spoken word, which is the only
+    # latency the caller actually hears.
+    model: str = _str("GROQ_LLM_MODEL", "llama-3.3-70b-versatile")
+    # Routing is a single classification, so the smallest model is enough.
+    router_model: str = _str("GROQ_ROUTER_LLM_MODEL", "llama-3.1-8b-instant")
+
+    def __post_init__(self) -> None:
+        if not self.enabled:
+            return
+        if not self.api_key:
+            raise RuntimeError(
+                "ENABLE_GROQ_LLM is on but GROQ_API_KEY is not set. "
+                "Add it to .env (see .env.example)."
+            )
+        # Groq keys start with "gsk_". An xAI key ("xai-") is a different
+        # company -- Groq serves open models fast, Grok is xAI's own model --
+        # and the endpoint only rejects it once a caller is already on the line.
+        if not self.api_key.startswith("gsk_"):
+            raise RuntimeError(
+                f"GROQ_API_KEY does not look like a Groq key (starts with "
+                f"{self.api_key[:4]!r}, expected 'gsk_'). Groq keys come from "
+                f"console.groq.com; an 'xai-' key belongs to xAI/Grok, which "
+                f"this pipeline does not use."
+            )
+
+
+@dataclass(frozen=True)
 class ElevenLabsConfig:
     api_key: str = _required("ELEVENLABS_API_KEY")
     voice_id: str = _required("ELEVEN_VOICE_ID")
@@ -106,6 +144,27 @@ class PostCallConfig:
 
 
 @dataclass(frozen=True)
+class OfficeHoursConfig:
+    """When the firm's attorneys are reachable. Outside these hours nothing transfers."""
+
+    start_hour: int = _int("OFFICE_HOURS_START", 8)
+    end_hour: int = _int("OFFICE_HOURS_END", 17)
+    # 0 = Monday ... 6 = Sunday.
+    days: tuple[int, ...] = (0, 1, 2, 3, 4)
+
+
+@dataclass(frozen=True)
+class TransferConfig:
+    # Master switch: off means the agent promises a callback instead of transferring.
+    enabled: bool = _bool("ENABLE_LIVE_TRANSFERS", False)
+    attorney_line: str = _str("ATTORNEY_LINE", "")
+    reception_line: str = _str("RECEPTION_LINE", "")
+    # How long the caller waits while the target line rings. LiveKit's own
+    # default is 30s, which is a long silence on a phone call.
+    ringing_timeout_s: float = _float("TRANSFER_RINGING_TIMEOUT_S", 18.0)
+
+
+@dataclass(frozen=True)
 class APIConfig:
     host: str = _str("API_HOST", "0.0.0.0")
     port: int = _int("API_PORT", 8000)
@@ -116,9 +175,12 @@ class APIConfig:
 LIVEKIT = LiveKitConfig()
 DEEPGRAM = DeepgramConfig()
 OPENAI = OpenAIConfig()
+GROQ = GroqConfig()
 ELEVENLABS = ElevenLabsConfig()
 CALL = CallConfig()
 POST_CALL = PostCallConfig()
+OFFICE_HOURS = OfficeHoursConfig()
+TRANSFER = TransferConfig()
 API = APIConfig()
 
 # Phrases Deepgram must hear correctly for routing.

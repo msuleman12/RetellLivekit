@@ -153,6 +153,35 @@ MAX_DURATION_GOODBYE = (
     "back. Take care."
 )
 
+ATTORNEY_TRANSFER_LINE = "Let me connect you with one of our attorneys. One moment."
+
+RECEPTION_TRANSFER_LINE = "Of course — let me connect you with our office right away."
+
+TRANSFER_FAILED_INSTRUCTIONS = (
+    "The attorney's line did not pick up, and the caller is still with you. In ONE "
+    "short, warm sentence say the attorneys are all with clients right now and you'll "
+    "take their details so someone can call them straight back. Do not apologise "
+    "twice, do not mention transferring again, and do not offer to try again. Then "
+    "ask only for their first and last name."
+)
+
+TRANSFERS_OPEN_BLOCK = """
+# Speaking to an attorney
+The office is open right now. If the caller asks to speak to an attorney or a
+person, call request_attorney. Never promise a transfer yourself, never say you
+are connecting them, and never ask them to hold - the tool does all of that.
+Never offer a transfer they did not ask for.
+""".strip()
+
+TRANSFERS_CLOSED_BLOCK = """
+# Speaking to an attorney
+The office is closed right now, so no one can be put through. If the caller asks
+to speak to an attorney, tell them our attorneys are available Monday through
+Friday, 8 AM to 5 PM Central Time, that you can help them right now, and that
+their information goes to the legal team first thing. Then carry on with the
+intake. Never offer or suggest a transfer, and do not raise it again.
+""".strip()
+
 RELATIVE_DATES_BLOCK = """
 # Dates
 Today is {today}. If the caller gives a relative date - "yesterday", "three
