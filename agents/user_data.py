@@ -30,6 +30,8 @@ class CallData:
     # One word for what became of it, so records can be filtered: connected,
     # no_answer, trunk_error, not_configured, no_sip_caller, error, declined_*.
     transfer_outcome: str = ""
+    # LiveKit egress recording this call; empty when recording is off.
+    recording_egress_id: str = ""
 
     @property
     def duration_ms(self) -> int:

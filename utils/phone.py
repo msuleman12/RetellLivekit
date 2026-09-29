@@ -40,3 +40,9 @@ def mask_phone(raw: str | None) -> str:
     """Last four digits only, for logs."""
     digits = re.sub(r"\D", "", raw or "")
     return f"***{digits[-4:]}" if len(digits) >= 4 else "-"
+
+
+def is_test_number(raw: str | None, test_numbers: tuple[str, ...]) -> bool:
+    """True when the caller ID matches a configured test number, in any format."""
+    digits = re.sub(r"\D", "", raw or "")[-10:]
+    return len(digits) == 10 and any(re.sub(r"\D", "", t)[-10:] == digits for t in test_numbers)

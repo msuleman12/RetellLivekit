@@ -25,7 +25,15 @@ _USER_FIELDS = {
 }
 
 
-def build_payload(data: CallData, custom: dict[str, Any], summary: str) -> dict[str, Any]:
+def build_payload(
+    data: CallData,
+    custom: dict[str, Any],
+    summary: str,
+    *,
+    is_test_call: bool = False,
+    priority_level: str = "",
+    recording_url: str = "",
+) -> dict[str, Any]:
     agent_name = AGENT_NAME_BY_CASE_TYPE[data.case_type]
     first = custom.get("user_fname") or ""
     last = custom.get("user_lname") or ""
@@ -46,9 +54,9 @@ def build_payload(data: CallData, custom: dict[str, Any], summary: str) -> dict[
             "address": custom.get("user_address") or "",
             "dob": custom.get("user_dob") or "",
             "call_summary": summary,
-            "is_test_call": False,
+            "is_test_call": is_test_call,
             "language": "en",
-            "priority_level": "",
+            "priority_level": priority_level,
         },
         agent_name: {k: v for k, v in custom.items() if k not in _USER_FIELDS},
         "metadata": {
@@ -63,6 +71,7 @@ def build_payload(data: CallData, custom: dict[str, Any], summary: str) -> dict[
             "transfer_reason": data.transfer_reason,
             "transfer_outcome": data.transfer_outcome,
             "transfer_sip_code": data.transfer_sip_code,
+            "recording_url": recording_url,
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
     }

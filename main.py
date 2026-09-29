@@ -28,7 +28,7 @@ from prompts.common_prompts import (
     SILENCE_GOODBYE,
     SILENCE_REMINDER_INSTRUCTIONS,
 )
-from services import post_call
+from services import post_call, recording
 from services.voice_pipeline import build_llm, build_stt, build_tts, build_turn_handling
 from utils.phone import mask_phone
 
@@ -40,8 +40,9 @@ def _ms(seconds: float | None) -> str:
     return "-" if seconds is None else f"{seconds * 1000:.0f}ms"
 
 
-# Post-call analysis runs during job shutdown; the 10s default can cut it off.
-server = AgentServer(shutdown_process_timeout=60.0, port=LIVEKIT.http_port)
+# Post-call runs during job shutdown: analysis, waiting for the recording
+# upload, the PDF and the email. The 10s default would cut it off.
+server = AgentServer(shutdown_process_timeout=120.0, port=LIVEKIT.http_port)
 
 
 @server.rtc_session(agent_name=LIVEKIT.agent_name)
@@ -112,11 +113,19 @@ async def entrypoint(ctx: JobContext) -> None:
 
     max_duration_task = asyncio.create_task(enforce_max_duration())
 
+    async def start_recording() -> None:
+        data.recording_egress_id = await recording.start(ctx.room.name) or ""
+
+    # In the background: the egress API call must not delay the greeting.
+    recording_task = asyncio.create_task(start_recording())
+
     async def on_shutdown() -> None:
         max_duration_task.cancel()
         if silence_task:
             silence_task.cancel()
         data.end("user_hangup")
+        # A very short call can hang up before the egress request returns.
+        await asyncio.wait({recording_task}, timeout=5)
         if latencies:
             logger.info(
                 "call latency: average %s, slowest %s, over %d replies",

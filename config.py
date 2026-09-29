@@ -41,6 +41,10 @@ def _bool(name: str, default: bool) -> bool:
     return raw in ("1", "true", "yes", "on") if raw else default
 
 
+def _list(name: str) -> tuple[str, ...]:
+    return tuple(item.strip() for item in os.getenv(name, "").split(",") if item.strip())
+
+
 @dataclass(frozen=True)
 class LiveKitConfig:
     url: str = _required("LIVEKIT_URL")
@@ -141,6 +145,69 @@ class PostCallConfig:
     zapier_webhook_url: str = _str("ZAPIER_WEBHOOK_URL", "")
     webhook_timeout_s: float = _float("POST_CALL_WEBHOOK_TIMEOUT_S", 10.0)
     records_dir: Path = Path(_str("CALL_RECORDS_DIR", "./call_records"))
+    # Calls from these numbers are still processed, but flagged as tests in the
+    # email subject, the Zapier payload and the database.
+    test_phone_numbers: tuple[str, ...] = _list("TEST_PHONE_NUMBERS")
+
+
+@dataclass(frozen=True)
+class EmailConfig:
+    """The intake email to the firm, sent through SendGrid."""
+
+    enabled: bool = _bool("ENABLE_LEGAL_EMAILS", False)
+    sendgrid_api_key: str = _str("SENDGRID_API_KEY", "")
+    from_email: str = _str("SENDGRID_FROM_EMAIL", "")
+    # Every intake goes here; the practice-area lists below are added on top.
+    legal_team: tuple[str, ...] = _list("LEGAL_TEAM_EMAILS")
+    accident: tuple[str, ...] = _list("ACCIDENT_EMAILS")
+    employment: tuple[str, ...] = _list("EMPLOYMENT_EMAILS")
+    premises: tuple[str, ...] = _list("PREMISES_LIABILITY_EMAILS")
+    harassment: tuple[str, ...] = _list("SEXUAL_HARASSMENT_EMAILS")
+    malpractice: tuple[str, ...] = _list("MEDICAL_MALPRACTICE_EMAILS")
+    # SendGrid rejects a message over 30MB; a recording above this is linked, not attached.
+    max_recording_attachment_mb: float = _float("EMAIL_MAX_RECORDING_MB", 20.0)
+
+    def __post_init__(self) -> None:
+        if self.enabled and not (self.sendgrid_api_key and self.from_email and self.legal_team):
+            raise RuntimeError(
+                "ENABLE_LEGAL_EMAILS is on but SENDGRID_API_KEY, SENDGRID_FROM_EMAIL "
+                "or LEGAL_TEAM_EMAILS is not set. Add them to .env (see .env.example)."
+            )
+
+    def recipients_for(self, case_type: str) -> list[str]:
+        extra = getattr(self, case_type, ()) if case_type else ()
+        return list(dict.fromkeys([*self.legal_team, *extra]))
+
+
+@dataclass(frozen=True)
+class RecordingConfig:
+    """Call audio recorded by LiveKit egress into an S3-compatible bucket."""
+
+    enabled: bool = _bool("ENABLE_CALL_RECORDING", False)
+    s3_bucket: str = _str("RECORDING_S3_BUCKET", "")
+    s3_region: str = _str("RECORDING_S3_REGION", "")
+    s3_access_key: str = _str("RECORDING_S3_ACCESS_KEY", "")
+    s3_secret_key: str = _str("RECORDING_S3_SECRET_KEY", "")
+    # Only for non-AWS storage (R2, Spaces, MinIO); leave empty for AWS.
+    s3_endpoint: str = _str("RECORDING_S3_ENDPOINT", "")
+    prefix: str = _str("RECORDING_PREFIX", "recordings/")
+    # Link lifetime in the email and webhooks. S3 allows 7 days at most.
+    link_ttl_s: int = _int("RECORDING_LINK_TTL_S", 7 * 24 * 3600)
+    # How long post-call waits for egress to finish uploading the file.
+    finish_timeout_s: float = _float("RECORDING_FINISH_TIMEOUT_S", 45.0)
+
+    def __post_init__(self) -> None:
+        if self.enabled and not (self.s3_bucket and self.s3_access_key and self.s3_secret_key):
+            raise RuntimeError(
+                "ENABLE_CALL_RECORDING is on but RECORDING_S3_BUCKET, RECORDING_S3_ACCESS_KEY "
+                "or RECORDING_S3_SECRET_KEY is not set. Add them to .env (see .env.example)."
+            )
+
+
+@dataclass(frozen=True)
+class DatabaseConfig:
+    # postgresql://user:pass@host:5432/db. Empty: calls are kept as JSON files only.
+    url: str = _str("DATABASE_URL", "")
 
 
 @dataclass(frozen=True)
@@ -179,6 +246,9 @@ GROQ = GroqConfig()
 ELEVENLABS = ElevenLabsConfig()
 CALL = CallConfig()
 POST_CALL = PostCallConfig()
+EMAIL = EmailConfig()
+RECORDING = RecordingConfig()
+DATABASE = DatabaseConfig()
 OFFICE_HOURS = OfficeHoursConfig()
 TRANSFER = TransferConfig()
 API = APIConfig()

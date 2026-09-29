@@ -1,8 +1,10 @@
-"""After hangup: extract intake fields from the transcript, save the record,
-and deliver it to the configured webhooks."""
+"""After hangup: extract intake fields from the transcript, score and assess
+the case, save the record, and deliver it (webhooks, database, intake email)."""
 
+import asyncio
 import json
 import logging
+from datetime import datetime
 from typing import Any
 
 import aiohttp
@@ -10,12 +12,12 @@ from livekit.agents import AgentSession
 from openai import AsyncOpenAI
 
 from agents.user_data import CallData
-from config import OPENAI, POST_CALL
+from config import DATABASE, EMAIL, OPENAI, POST_CALL
 from prompts.common_prompts import POST_CALL_SYSTEM
-from services import zapier_webhook
+from services import case_assessment, database, intake_email, priority, priority_pdf, recording, zapier_webhook
 from services.analysis_fields import FIELDS_BY_CASE_TYPE, field_guide, json_schema_for
-from utils.dates import spoken_date
-from utils.phone import normalize_us_phone
+from utils.dates import FIRM_TZ, spoken_date
+from utils.phone import is_test_number, normalize_us_phone
 
 logger = logging.getLogger("intake.post_call")
 
@@ -94,17 +96,103 @@ async def _post(url: str, payload: dict[str, Any]) -> int:
             return resp.status
 
 
+def _usage(session: AgentSession) -> list[dict[str, Any]]:
+    """Tokens, characters and audio seconds per model, for cost tracking."""
+    try:
+        return [u.model_dump(mode="json") for u in session.usage.model_usage]
+    except Exception:
+        logger.exception("could not read session usage")
+        return []
+
+
+async def _finish_recording(egress_id: str) -> dict[str, Any] | None:
+    if not egress_id:
+        return None
+    try:
+        return await recording.finish(egress_id)
+    except Exception:
+        logger.exception("recording finish failed")
+        return {"egress_id": egress_id, "status": "error"}
+
+
+async def _email(
+    data: CallData,
+    payload: dict[str, Any],
+    custom: dict[str, Any],
+    summary: str,
+    priority_result: dict[str, Any],
+    assessment: dict[str, Any] | None,
+    recording_info: dict[str, Any] | None,
+    is_test_call: bool,
+) -> None:
+    caller = {
+        "Name": f"{custom.get('user_fname') or ''} {custom.get('user_lname') or ''}".strip(),
+        "Callback number": custom.get("user_phone") or custom.get("user_phone_unverified") or "",
+        "Caller ID": data.from_number,
+        "Email": custom.get("user_email") or "",
+        "Other party": custom.get("other_party_name") or "",
+        "City": custom.get("incident_city") or "",
+    }
+    pdf = None
+    try:
+        pdf = await asyncio.to_thread(
+            priority_pdf.generate,
+            case_label=intake_email.case_label(data.case_type),
+            caller=caller,
+            priority=priority_result,
+            assessment=assessment,
+            call_summary=summary,
+            call_time=datetime.fromtimestamp(data.started_at, FIRM_TZ),
+            is_test_call=is_test_call,
+        )
+    except Exception:
+        logger.exception("priority PDF generation failed; sending the email without it")
+
+    audio = None
+    max_bytes = EMAIL.max_recording_attachment_mb * 1024 * 1024
+    if recording_info and recording_info.get("key") and recording_info.get("size_bytes", 0) <= max_bytes:
+        try:
+            audio = await recording.download(recording_info["key"])
+        except Exception:
+            logger.exception("recording download failed; the email links it instead")
+
+    status = await intake_email.send(
+        data=data,
+        custom=custom,
+        summary=summary,
+        priority=priority_result,
+        record=payload,
+        is_test_call=is_test_call,
+        pdf=pdf,
+        recording=recording_info,
+        recording_audio=audio,
+    )
+    logger.info("intake email sent (%s)", status)
+
+
 async def run(session: AgentSession, data: CallData) -> None:
     transcript, turns = build_transcript(session)
+    caller_text = "\n".join(t["content"] for t in turns if t["role"] == "user")
+    is_test_call = is_test_number(data.from_number, POST_CALL.test_phone_numbers)
 
     custom: dict[str, Any] = {}
     summary: dict[str, Any] = {key: None for key in _SUMMARY_FIELDS}
-    if data.case_type and transcript:
-        # The transcript is saved even if analysis fails, so no call is ever lost.
-        try:
-            custom, summary = await analyze(data.case_type, transcript, spoken_date(data.started_at))
-        except Exception:
-            logger.exception("post-call analysis failed")
+
+    async def _analyze() -> None:
+        nonlocal custom, summary
+        if data.case_type and transcript:
+            # The transcript is saved even if analysis fails, so no call is ever lost.
+            try:
+                custom, summary = await analyze(data.case_type, transcript, spoken_date(data.started_at))
+            except Exception:
+                logger.exception("post-call analysis failed")
+
+    # Egress finishes uploading while the analysis model runs.
+    _, recording_info = await asyncio.gather(_analyze(), _finish_recording(data.recording_egress_id))
+
+    priority_result = priority.calculate(data.case_type, custom, caller_text)
+    assessment = case_assessment.assess(data.case_type, custom)
+    logger.info("priority %s: %s", priority_result["priority_level"], priority_result["reasoning"])
 
     payload = {
         "event": "call_analyzed",
@@ -112,18 +200,33 @@ async def run(session: AgentSession, data: CallData) -> None:
             **data.to_dict(),
             "call_type": "phone_call",
             "direction": "inbound",
+            "is_test_call": is_test_call,
             "transcript": transcript,
             "transcript_object": turns,
-            "call_analysis": {"custom_analysis_data": custom, **summary},
+            "recording": recording_info,
+            "usage": _usage(session),
+            "call_analysis": {
+                "custom_analysis_data": custom,
+                **summary,
+                "priority": priority_result,
+                "case_assessment": assessment,
+            },
         },
     }
 
     POST_CALL.records_dir.mkdir(parents=True, exist_ok=True)
     path = POST_CALL.records_dir / f"{int(data.started_at)}_{data.call_id}.json"
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
     logger.info("call record written to %s", path)
 
-    # Each delivery is independent: one endpoint being down must not cost the other.
+    # Each delivery is independent: one being down must not cost the others.
+    if DATABASE.url:
+        try:
+            await database.save(payload)
+            logger.info("call record saved to the database")
+        except Exception:
+            logger.exception("database save failed")
+
     if POST_CALL.webhook_url:
         try:
             status = await _post(POST_CALL.webhook_url, payload)
@@ -133,8 +236,26 @@ async def run(session: AgentSession, data: CallData) -> None:
 
     if POST_CALL.zapier_webhook_url and data.case_type:
         try:
-            zap = zapier_webhook.build_payload(data, custom, summary.get("call_summary") or "")
+            zap = zapier_webhook.build_payload(
+                data,
+                custom,
+                summary.get("call_summary") or "",
+                is_test_call=is_test_call,
+                priority_level=priority_result["priority_level"],
+                recording_url=(recording_info or {}).get("url") or "",
+            )
             status = await _post(POST_CALL.zapier_webhook_url, zap)
             logger.info("Zapier webhook delivered (%s)", status)
         except Exception:
             logger.exception("Zapier webhook delivery failed")
+
+    # Calls that never reached a practice area (wrong numbers, hang-ups at the
+    # greeting) are recorded but not emailed, as in the old build.
+    if EMAIL.enabled and data.case_type:
+        try:
+            await _email(
+                data, payload, custom, summary.get("call_summary") or "",
+                priority_result, assessment, recording_info, is_test_call,
+            )
+        except Exception:
+            logger.exception("intake email failed")
