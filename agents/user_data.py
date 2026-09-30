@@ -32,6 +32,8 @@ class CallData:
     transfer_outcome: str = ""
     # LiveKit egress recording this call; empty when recording is off.
     recording_egress_id: str = ""
+    # Twilio's id for the call, used to fetch Twilio's recording of it.
+    twilio_call_sid: str = ""
 
     @property
     def duration_ms(self) -> int:
@@ -64,4 +66,5 @@ class CallData:
             "transfer_destination": self.transfer_destination,
             "transfer_sip_code": self.transfer_sip_code,
             "transfer_outcome": self.transfer_outcome,
+            "twilio_call_sid": self.twilio_call_sid,
         }

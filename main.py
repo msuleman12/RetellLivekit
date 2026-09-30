@@ -154,6 +154,7 @@ async def entrypoint(ctx: JobContext) -> None:
     data.call_id = attrs.get("sip.callID") or ctx.room.name
     data.from_number = attrs.get("sip.phoneNumber", "")
     data.to_number = attrs.get("sip.trunkPhoneNumber", "")
+    data.twilio_call_sid = attrs.get("sip.twilio.callSid", "")
     ctx.log_context_fields = {"room": ctx.room.name, "call_id": data.call_id}
     logger.info("call from %s to %s", mask_phone(data.from_number), mask_phone(data.to_number))
 

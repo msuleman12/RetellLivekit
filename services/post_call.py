@@ -12,7 +12,7 @@ from livekit.agents import AgentSession
 from openai import AsyncOpenAI
 
 from agents.user_data import CallData
-from config import DATABASE, EMAIL, OPENAI, POST_CALL
+from config import DATABASE, EMAIL, OPENAI, POST_CALL, RECORDING
 from prompts.common_prompts import POST_CALL_SYSTEM
 from services import case_assessment, database, intake_email, priority, priority_pdf, recording, zapier_webhook
 from services.analysis_fields import FIELDS_BY_CASE_TYPE, field_guide, json_schema_for
@@ -105,14 +105,26 @@ def _usage(session: AgentSession) -> list[dict[str, Any]]:
         return []
 
 
-async def _finish_recording(egress_id: str) -> dict[str, Any] | None:
-    if not egress_id:
-        return None
+async def _finish_recording(data: CallData) -> tuple[dict[str, Any] | None, bytes | None]:
+    """(recording info for the record, the MP3 when it was already downloaded)."""
+    if not RECORDING.enabled:
+        return None, None
+    if RECORDING.source == "twilio":
+        if not data.twilio_call_sid:
+            logger.warning("no Twilio Call SID on this call (not a Twilio SIP call?); no recording to fetch")
+            return None, None
+        try:
+            return await recording.fetch_twilio(data.twilio_call_sid)
+        except Exception:
+            logger.exception("Twilio recording download failed")
+            return {"source": "twilio", "call_sid": data.twilio_call_sid, "status": "error"}, None
+    if not data.recording_egress_id:
+        return None, None
     try:
-        return await recording.finish(egress_id)
+        return await recording.finish(data.recording_egress_id), None
     except Exception:
         logger.exception("recording finish failed")
-        return {"egress_id": egress_id, "status": "error"}
+        return {"egress_id": data.recording_egress_id, "status": "error"}, None
 
 
 async def _email(
@@ -123,34 +135,29 @@ async def _email(
     priority_result: dict[str, Any],
     assessment: dict[str, Any] | None,
     recording_info: dict[str, Any] | None,
+    recording_audio: bytes | None,
     is_test_call: bool,
 ) -> None:
-    caller = {
-        "Name": f"{custom.get('user_fname') or ''} {custom.get('user_lname') or ''}".strip(),
-        "Callback number": custom.get("user_phone") or custom.get("user_phone_unverified") or "",
-        "Caller ID": data.from_number,
-        "Email": custom.get("user_email") or "",
-        "Other party": custom.get("other_party_name") or "",
-        "City": custom.get("incident_city") or "",
-    }
     pdf = None
     try:
         pdf = await asyncio.to_thread(
             priority_pdf.generate,
             case_label=intake_email.case_label(data.case_type),
-            caller=caller,
+            full_name=f"{custom.get('user_fname') or ''} {custom.get('user_lname') or ''}".strip(),
+            email=custom.get("user_email") or "",
+            phone=intake_email.caller_phone(custom) or data.from_number,
+            language=intake_email.language_display(),
             priority=priority_result,
             assessment=assessment,
             call_summary=summary,
             call_time=datetime.fromtimestamp(data.started_at, FIRM_TZ),
-            is_test_call=is_test_call,
         )
     except Exception:
         logger.exception("priority PDF generation failed; sending the email without it")
 
-    audio = None
+    audio = recording_audio
     max_bytes = EMAIL.max_recording_attachment_mb * 1024 * 1024
-    if recording_info and recording_info.get("key") and recording_info.get("size_bytes", 0) <= max_bytes:
+    if audio is None and recording_info and recording_info.get("key") and recording_info.get("size_bytes", 0) <= max_bytes:
         try:
             audio = await recording.download(recording_info["key"])
         except Exception:
@@ -187,8 +194,8 @@ async def run(session: AgentSession, data: CallData) -> None:
             except Exception:
                 logger.exception("post-call analysis failed")
 
-    # Egress finishes uploading while the analysis model runs.
-    _, recording_info = await asyncio.gather(_analyze(), _finish_recording(data.recording_egress_id))
+    # The recording finishes (egress upload or Twilio processing) while the analysis model runs.
+    _, (recording_info, recording_audio) = await asyncio.gather(_analyze(), _finish_recording(data))
 
     priority_result = priority.calculate(data.case_type, custom, caller_text)
     assessment = case_assessment.assess(data.case_type, custom)
@@ -255,7 +262,7 @@ async def run(session: AgentSession, data: CallData) -> None:
         try:
             await _email(
                 data, payload, custom, summary.get("call_summary") or "",
-                priority_result, assessment, recording_info, is_test_call,
+                priority_result, assessment, recording_info, recording_audio, is_test_call,
             )
         except Exception:
             logger.exception("intake email failed")

@@ -181,9 +181,18 @@ class EmailConfig:
 
 @dataclass(frozen=True)
 class RecordingConfig:
-    """Call audio recorded by LiveKit egress into an S3-compatible bucket."""
+    """Call audio for the intake email and the call record.
+
+    "twilio" (the old build's way): Twilio records the call on the SIP trunk
+    and the MP3 is downloaded by Call SID after hangup. Recording must be
+    turned on for the trunk in the Twilio console.
+    "egress": LiveKit egress records the room into an S3-compatible bucket.
+    """
 
     enabled: bool = _bool("ENABLE_CALL_RECORDING", False)
+    source: str = _str("RECORDING_SOURCE", "twilio").lower()
+    twilio_account_sid: str = _str("TWILIO_ACCOUNT_SID", "")
+    twilio_auth_token: str = _str("TWILIO_AUTH_TOKEN", "")
     s3_bucket: str = _str("RECORDING_S3_BUCKET", "")
     s3_region: str = _str("RECORDING_S3_REGION", "")
     s3_access_key: str = _str("RECORDING_S3_ACCESS_KEY", "")
@@ -193,13 +202,22 @@ class RecordingConfig:
     prefix: str = _str("RECORDING_PREFIX", "recordings/")
     # Link lifetime in the email and webhooks. S3 allows 7 days at most.
     link_ttl_s: int = _int("RECORDING_LINK_TTL_S", 7 * 24 * 3600)
-    # How long post-call waits for egress to finish uploading the file.
+    # How long post-call waits for the recording to be ready after hangup.
     finish_timeout_s: float = _float("RECORDING_FINISH_TIMEOUT_S", 45.0)
 
     def __post_init__(self) -> None:
-        if self.enabled and not (self.s3_bucket and self.s3_access_key and self.s3_secret_key):
+        if not self.enabled:
+            return
+        if self.source not in ("twilio", "egress"):
+            raise RuntimeError(f"RECORDING_SOURCE must be 'twilio' or 'egress', not {self.source!r}.")
+        if self.source == "twilio" and not (self.twilio_account_sid and self.twilio_auth_token):
             raise RuntimeError(
-                "ENABLE_CALL_RECORDING is on but RECORDING_S3_BUCKET, RECORDING_S3_ACCESS_KEY "
+                "ENABLE_CALL_RECORDING is on with RECORDING_SOURCE=twilio but TWILIO_ACCOUNT_SID "
+                "or TWILIO_AUTH_TOKEN is not set. Add them to .env (see .env.example)."
+            )
+        if self.source == "egress" and not (self.s3_bucket and self.s3_access_key and self.s3_secret_key):
+            raise RuntimeError(
+                "ENABLE_CALL_RECORDING is on with RECORDING_SOURCE=egress but RECORDING_S3_BUCKET, RECORDING_S3_ACCESS_KEY "
                 "or RECORDING_S3_SECRET_KEY is not set. Add them to .env (see .env.example)."
             )
 

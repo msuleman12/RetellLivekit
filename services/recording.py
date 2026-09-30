@@ -1,9 +1,12 @@
-"""Call recording: LiveKit room-composite egress writes an MP3 of both sides of
-the call to an S3-compatible bucket. The old build pulled the recording from
-Twilio instead; with LiveKit SIP there is no Twilio recording to pull.
+"""Call recording, from one of two sources (RECORDING_SOURCE):
 
-`start` runs when the call connects; `finish` runs after hangup and waits for
-egress to upload the file, then returns where it is and a time-limited link.
+- twilio: as in the old build, Twilio records the call on the SIP trunk and
+  `fetch_twilio` downloads the MP3 by Call SID after hangup. Recording has to
+  be switched on for the trunk in the Twilio console.
+- egress: LiveKit room-composite egress writes an MP3 of both sides of the
+  call to an S3-compatible bucket. `start` runs when the call connects;
+  `finish` runs after hangup and waits for egress to upload the file, then
+  returns where it is and a time-limited link.
 """
 
 import asyncio
@@ -11,6 +14,7 @@ import logging
 import time
 from typing import Any
 
+import aiohttp
 from livekit import api as lkapi
 
 from config import LIVEKIT, RECORDING
@@ -43,7 +47,7 @@ def _s3_client() -> Any:
 
 async def start(room_name: str) -> str | None:
     """Starts recording the room. Returns the egress id, or None when off or failed."""
-    if not RECORDING.enabled:
+    if not RECORDING.enabled or RECORDING.source != "egress":
         return None
     filepath = f"{RECORDING.prefix}{int(time.time())}_{room_name}.mp3"
     request = lkapi.RoomCompositeEgressRequest(
@@ -131,3 +135,51 @@ async def download(key: str) -> bytes:
         return _s3_client().get_object(Bucket=RECORDING.s3_bucket, Key=key)["Body"].read()
 
     return await asyncio.to_thread(_get)
+
+
+_TWILIO_API = "https://api.twilio.com/2010-04-01/Accounts"
+
+
+async def fetch_twilio(call_sid: str) -> tuple[dict[str, Any], bytes | None]:
+    """Waits for Twilio to finish the call's recording and downloads the MP3.
+
+    Returns ({source, status, call_sid, recording_sid, duration_s, size_bytes}, audio).
+    Twilio's media link needs the account credentials, so there is no `url`.
+    """
+    result: dict[str, Any] = {"source": "twilio", "call_sid": call_sid, "status": "unknown"}
+    base = f"{_TWILIO_API}/{RECORDING.twilio_account_sid}"
+    headers = {"Authorization": aiohttp.encode_basic_auth(RECORDING.twilio_account_sid, RECORDING.twilio_auth_token)}
+    deadline = time.monotonic() + RECORDING.finish_timeout_s
+    timeout = aiohttp.ClientTimeout(total=60)
+    async with aiohttp.ClientSession(headers=headers, timeout=timeout) as http:
+        # The recording is listed as soon as the call ends but is only
+        # downloadable once Twilio has finished processing it.
+        recording = None
+        while time.monotonic() < deadline:
+            async with http.get(f"{base}/Recordings.json", params={"CallSid": call_sid}) as resp:
+                resp.raise_for_status()
+                items = (await resp.json()).get("recordings") or []
+            recording = items[0] if items else None
+            if recording and recording.get("status") in ("completed", "absent", "failed", "deleted"):
+                break
+            await asyncio.sleep(2)
+
+        if recording is None:
+            result["status"] = "not_found"
+            logger.warning("no Twilio recording for call %s; is recording on for the SIP trunk?", call_sid)
+            return result, None
+        result.update(
+            recording_sid=recording["sid"],
+            status=recording.get("status") or "unknown",
+            duration_s=float(recording.get("duration") or 0),
+        )
+        if result["status"] != "completed":
+            logger.warning("Twilio recording %s is %s", recording["sid"], result["status"])
+            return result, None
+
+        async with http.get(f"{base}/Recordings/{recording['sid']}.mp3") as resp:
+            resp.raise_for_status()
+            audio = await resp.read()
+    result["size_bytes"] = len(audio)
+    logger.info("Twilio recording %s downloaded (%.0fs, %d bytes)", recording["sid"], result["duration_s"], len(audio))
+    return result, audio
