@@ -22,7 +22,9 @@ this worker, and Claire answers.
    priority (HIGH / MEDIUM / LOW), assesses the 3 I's, and writes
    `call_records/<start>_<call_id>.json`. Each of these then runs if
    configured, independently of the others:
-   - Postgres upsert into `intake_calls` (`DATABASE_URL`)
+   - Postgres save (`DATABASE_URL`) in the old build's layout: `user_data`,
+     one table per practice area, `session_tracking`, `error_events`, plus
+     the full record in `intake_calls`
    - `POST_CALL_WEBHOOK_URL` (full record) and `ZAPIER_WEBHOOK_URL`
    - SendGrid email to the intake team (`ENABLE_LEGAL_EMAILS`), with the
      priority PDF, the record as JSON and the MP3 recording attached
@@ -53,7 +55,7 @@ services/
   priority_pdf.py           priority assessment PDF for the email
   intake_email.py           SendGrid intake email
   recording.py              LiveKit egress call recording (S3)
-  database.py               Postgres `intake_calls` table
+  database.py               Postgres tables (old ai-receptionist layout)
   zapier_webhook.py         payload shape the firm's existing Zap expects
 utils/phone.py              US phone normalization
 api/server.py               control API (test sessions, call records)

@@ -38,7 +38,7 @@ def build_payload(
     first = custom.get("user_fname") or ""
     last = custom.get("user_lname") or ""
     return {
-        "session_id": data.call_id,
+        "session_id": data.session_id,
         "agent_name": agent_name,
         "call_started_at": datetime.fromtimestamp(data.started_at, tz=CST).isoformat(),
         "user": {

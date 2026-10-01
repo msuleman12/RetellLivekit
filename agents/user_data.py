@@ -36,6 +36,14 @@ class CallData:
     twilio_call_sid: str = ""
 
     @property
+    def session_id(self) -> str:
+        """The old build's id format, bblgintake-_<caller digits>_<id>. Records
+        are matched on it downstream and the caller's number is read out of it."""
+        digits = "".join(c for c in self.from_number if c.isdigit())
+        suffix = "".join(c for c in self.call_id if c.isalnum())
+        return f"bblgintake-_{digits}_{suffix}"
+
+    @property
     def duration_ms(self) -> int:
         return int(((self.ended_at or time.time()) - self.started_at) * 1000)
 
@@ -48,6 +56,7 @@ class CallData:
     def to_dict(self) -> dict[str, Any]:
         return {
             "call_id": self.call_id,
+            "session_id": self.session_id,
             "room_name": self.room_name,
             "from_number": self.from_number,
             "to_number": self.to_number,
