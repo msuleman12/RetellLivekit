@@ -12,6 +12,9 @@ __pycache__/
 *.py[cod]
 .ruff_cache/
 .mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
 
 # Call records contain client data; they stay on the machine that took the call.
 call_records/
@@ -19,6 +22,7 @@ call_records/
 # Runtime output
 *.log
 logs/
+KMS/
 
 # Editors / OS
 .vscode/
