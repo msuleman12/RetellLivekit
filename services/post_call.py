@@ -18,8 +18,11 @@ from services import case_assessment, database, intake_email, priority, priority
 from services.analysis_fields import FIELDS_BY_CASE_TYPE, field_guide, json_schema_for
 from utils.dates import FIRM_TZ, spoken_date
 from utils.phone import is_test_number, normalize_us_phone
+from utils.spoken import normalize_email, normalize_reference
 
 logger = logging.getLogger("intake.post_call")
+
+_REFERENCE_FIELDS = ("police_report_number", "premises_report_number", "insurance_claim_number")
 
 _SUMMARY_FIELDS = {
     "call_summary": {
@@ -85,6 +88,13 @@ async def analyze(
             custom["user_phone"] = phone
         else:
             custom["user_phone_unverified"] = custom.pop("user_phone")
+    # The model occasionally copies a spelled-out value verbatim; anything that
+    # cannot be converted is kept as said rather than dropped.
+    if "user_email" in custom:
+        custom["user_email"] = normalize_email(str(custom["user_email"])) or custom["user_email"]
+    for key in _REFERENCE_FIELDS:
+        if key in custom:
+            custom[key] = normalize_reference(str(custom[key])) or custom[key]
     return custom, summary
 
 

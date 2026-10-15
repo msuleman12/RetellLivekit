@@ -197,6 +197,8 @@ Rules:
 - Dates: the call date is given above the transcript. When the caller used a relative date ("today", "yesterday", "3 days ago", "last Friday", "last week", "two months ago"), calculate the actual date from the call date and record that, written like "December 23, 2025". Never record the relative words themselves. "Last week" / "a week ago" means 7 days before the call date. If the caller was only approximate ("a few days ago", "last month"), record the calculated date prefixed with "around" (e.g. "around December 20, 2025"), or the month and year when only the month is known (e.g. "November 2025").
 - If a field was not discussed, or you are not confident what was said, return null for it.
 - Phone numbers: digits only, exactly 10 US digits. If fewer than 10 digits were said, return null.
+- Email addresses: write the real address, never the spoken words. Join spelled letters, turn number words into digits, "at" into "@" and "dot" into ".", with no spaces. "harry l philips ninety eight at gmail dot com" becomes "harrylphilips98@gmail.com". If the caller corrected or confirmed a spelling, use the final confirmed version.
+- Report, claim and reference numbers: write the code itself in capitals and digits with no spaces, never the spoken words. "one two three k l f" becomes "123KLF"; keep a dash only if the caller said one.
 - Do not assess the strength of the case, do not give legal opinions.
 """
 
