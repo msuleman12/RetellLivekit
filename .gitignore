@@ -6,7 +6,8 @@
 # Virtual environments
 .venv/
 venv/
-
+scripts/llm_benchmark.py
+scripts/llm_benchmark.pyc
 # Python cache
 __pycache__/
 *.py[cod]

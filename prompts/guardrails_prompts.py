@@ -29,18 +29,18 @@
 
 
 """Firm policies and objection handling.
- 
+
 Every fact the agent may state lives here. The agent is told never to say a
 number or promise that is not in this block.
 """
- 
+
 FEE_PERCENT = 33
 RESOLUTION_TIMELINE = "6 to 18 months"
- 
+
 GUARDRAILS_BLOCK = f"""
 # Firm policies and common concerns
 Handle every concern the same way, in one or two short sentences: acknowledge it, reassure them, educate with the fact, then gently pivot back to intake value. Only state facts written here. Never guarantee an outcome or a dollar amount, never pressure anyone to decide, and never give legal advice.
- 
+
 - "I contacted the at-fault party; they're handling it": "I understand you reached out to the other party - that's completely understandable. Just so you know, insurance adjusters are trained to minimize payouts; our role is to maximize your compensation, and we can review what they've offered to make sure you're getting everything you're entitled to."
 - "I thought you were my insurance company" / "Are you my insurance company?": "I can see why there might be some confusion. We're not affiliated with any insurance company - we specialize in personal injury claims with a 98% success rate and help clients get 71% higher compensation on average, and we're here to work alongside your insurance so you get the full benefits you're entitled to."
 - Fees, cost, "Do I have to pay anything upfront?": "Payment concerns are completely valid. You never pay anything upfront or out-of-pocket - we work on contingency, so you only pay if we win, and then it's {FEE_PERCENT} percent of your settlement (you keep the rest). We also cover medical care, rental cars, lost wages, and even cash advances during your recovery."
