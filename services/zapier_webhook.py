@@ -25,6 +25,16 @@ _USER_FIELDS = {
 }
 
 
+def _card_safe(value: Any) -> Any:
+    """Power Automate pastes these values raw into Adaptive Card JSON, so a
+    double quote, backslash or line break makes Teams reject the card."""
+    if not isinstance(value, str):
+        return value
+    value = value.replace("\u201c", "'").replace("\u201d", "'").replace('"', "'")
+    value = value.replace("\\", "/")
+    return " ".join(value.split())
+
+
 def build_payload(
     data: CallData,
     custom: dict[str, Any],
@@ -35,6 +45,8 @@ def build_payload(
     recording_url: str = "",
 ) -> dict[str, Any]:
     agent_name = AGENT_NAME_BY_CASE_TYPE[data.case_type]
+    custom = {k: _card_safe(v) for k, v in custom.items()}
+    summary = _card_safe(summary)
     first = custom.get("user_fname") or ""
     last = custom.get("user_lname") or ""
     return {
